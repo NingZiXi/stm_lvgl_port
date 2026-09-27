@@ -2,6 +2,8 @@
 
 LVGL 9 粘合组件：板级代码通过 `draw` 回调连接已确认的 SPI 面板芯片驱动或 RGB LTDC 帧缓冲，`touch` 回调可选。组件不依赖某个具体屏幕或触摸库。提供已命名的 `lvgl` CMake 目标后才能添加本组件；CubeMX/HAL 和 LVGL 的具体接法见[显示与触摸接入指南](https://github.com/NingZiXi/stm32-hal-lib/blob/main/docs/display-components.md)。
 
+完整中文示例：[`examples/stm32_hal/README.md`](examples/stm32_hal/README.md)（含 LVGL tick、handler 与屏幕/触摸回调）。
+
 ```c
 static stm_lvgl_port_t port = {0};
 static uint8_t draw_buffer[BOARD_LCD_WIDTH * 20u * 2u]; /* RGB565，20 行 */
