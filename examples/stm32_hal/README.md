@@ -1,65 +1,39 @@
-# LVGL 9：STM32 HAL 接入示例
+# lvgl_port：STM32 HAL 接入示例
 
-本示例演示 `lv_init` → `stm_lvgl_port_attach` → 创建标签 → 周期性 `lv_tick_inc` 与 `lv_timer_handler`。`draw` 为已初始化屏幕的同步刷新回调，`touch` 可选；板级 SPI、LTDC、DMA、像素缓存一致性及锁由应用提供。**尚未经过屏幕实板验证**。代码使用 H7 HAL 头文件，其他 STM32 系列应替换对应头文件；不是完整 CubeMX 工程，LVGL 9 必须先加入应用且提供 CMake `lvgl` 目标。
+本目录提供可复制到已有 HAL 应用的 `example.c` / `example.h`，不是完整 CubeMX 工程。先初始化板级时钟、GPIO 和总线，再传入实际 HAL 句柄/引脚。代码使用 STM32H7 HAL，其他系列自行替换头文件；示例不会自动编入组件库。
 
-把 `example.c` 放入 CM7 应用目标，确保板级面板完成初始化后再调用以下示意。这里用 ST7789；实际是 ST7796 时改成对应组件。示例只借助 HAL tick 推进 LVGL，不在 `SysTick_Handler` 里重复调用 `lv_tick_inc`。
+当前示例对应未发布的新 API；软件验证通过后仍需按实物回归。v0.1.0 与 H757、LVGL 9.3.0、ILI9881C/GT9271 已完成持续刷新、交互和复位观察；软件迁移版本尚未实板回归。
 
-```c
-#include "example.h"
-#include "stm_lcd_st7789.h"
-#include "stm_lcd_touch_ft5206.h" /* 没有 FT5206 时删除此行与下方可选触摸回调 */
+## 接入步骤
 
-#define LCD_WIDTH 240u /* 用真实模组宽高替换 */
-#define LCD_HEIGHT 320u
-static uint8_t lvgl_buffer[LCD_WIDTH * 20u * 2u]; /* 至少宽度×2 字节，需可写且长寿命 */
-static stm_lvgl_port_t port;
-extern stm_lcd_st7789_t panel; /* 已由板级初始化 */
-extern stm_lcd_touch_ft5206_t touch; /* 可选；已由板级初始化 */
-
-static int draw(void *context, uint16_t x1, uint16_t y1,
-                uint16_t x2, uint16_t y2, const void *pixels)
-{
-    return stm_lcd_st7789_draw_bitmap((stm_lcd_st7789_t *)context,
-                                       x1, y1, x2, y2, pixels);
-}
-
-static int read_touch(void *context, int *pressed, uint16_t *x, uint16_t *y)
-{
-    stm_lcd_touch_ft5206_t *device = (stm_lcd_touch_ft5206_t *)context;
-    stm_lcd_touch_ft5206_point_t point;
-    size_t count = 0;
-    int rc = stm_lcd_touch_ft5206_read_data(device);
-    if (rc == 0) rc = stm_lcd_touch_ft5206_get_data(device, &point, 1u, &count);
-    if (rc != 0) return rc;
-    *pressed = count > 0;
-    if (count) { *x = point.x; *y = point.y; }
-    return 0;
-}
-
-void app_main(void)
-{
-    /* 先在板级代码里初始化 SPI/GPIO、panel、I²C/touch。 */
-    stm_lvgl_port_config_t cfg = {
-        .width = LCD_WIDTH, .height = LCD_HEIGHT,
-        .draw_buffer = lvgl_buffer, .draw_buffer_bytes = sizeof(lvgl_buffer),
-        .display_context = &panel, .draw = draw,
-        .touch_context = &touch, .touch = read_touch, /* 无触摸时两项都设为 NULL */
-    };
-    int rc = stm_lvgl_port_example_start(&port, &cfg);
-    if (rc != 0) { /* 记录错误码并停止绘图。 */ return; }
-    for (;;) {
-        stm_lvgl_port_example_step();
-        HAL_Delay(5);
-    }
-}
-```
-
-LVGL 颜色格式为 RGB565，端口回调收到的是排他右下角坐标；若面板传输需要交换 RGB565 字节序或 DCache 维护，应在板级处理。`draw()` 必须在返回前完成像素传输；不能直接启动 DMA 后立即返回。RTOS 多任务时序列化所有 LVGL API，避免两个任务同时进入 handler。确认屏幕方向、颜色和触摸方向后再做实板测试。
-
-在 CM7 的 `CMakeLists.txt` 把复制到 `App/` 的示例源码加入应用目标（具体目录名按工程调整）：
+1. 将组件和 stm_common 加入 CMake；LVGL port 先提供 LVGL 9 target。
+2. 将本目录两个源码文件复制到应用，替换 HAL 头文件和实际板级参数。
+3. 以 NULL 初始化句柄，按 example.h 的 start 接口创建；板级结构体必须持久有效。
+4. 循环绘图/读取触点或调用 LVGL handler，检查每一步 `err != STM_OK`。
+5. 停止所有访问后调用 `lvgl_port_delete(&handle)`。
 
 ```cmake
-target_sources(${CMAKE_PROJECT_NAME} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/App/example.c)
+target_sources(your_firmware PRIVATE App/example.c)
+target_include_directories(your_firmware PRIVATE App)
+target_link_libraries(your_firmware PRIVATE stm_lvgl_port)
 ```
 
-中文主页：[README.md](../../README.md)；[完整接入指南](https://github.com/NingZiXi/stm32-hal-lib/blob/main/docs/display-components.md)。
+HAL_TIMEOUT 映射为 STM_ERR_TIMEOUT，HAL_ERROR/HAL_BUSY 映射为 STM_ERR_IO，start 失败保留首个错误并回收本次创建的对象，重复 start 不覆盖已有句柄。传输同步完成后才能复用缓冲；阻塞 API 不从中断调用。
+
+## LVGL 最小主循环
+
+```c
+lvgl_port_handle_t port = NULL;
+/* 先完成板级屏幕初始化，提供持久配置 cfg、同步 draw 和可选 touch。 */
+lv_init(); /* 应用统一调用一次。 */
+stm_err_t err = lvgl_port_example_start(&cfg, &port);
+if (err != STM_OK) return;
+for (;;) {
+    lvgl_port_example_step(); /* HAL tick 的实际时间差 + lv_timer_handler。 */
+    HAL_Delay(5);
+}
+```
+
+缓冲需满足 LV_DRAW_BUF_ALIGN、至少一行 RGB565。示例基于借用的 display 创建标签，避免依赖全局默认屏幕；应用不要在其他入口重复推进 tick。draw 接收半开矩形和同步像素；touch 成功写 pressed/x/y。lvgl_port_get_status 查询错误，get_display 获取借用对象供板级设置 DIRECT；替换 flush 后独立记录其错误。
+
+完整 API、错误和资源契约见[中文主页](../../README.md)。

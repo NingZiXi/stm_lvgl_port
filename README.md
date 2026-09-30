@@ -1,27 +1,83 @@
-# stm_lvgl_port
+# stm_lvgl_port：LVGL 9 同步粘合层
 
-LVGL 9 粘合组件：板级代码通过 `draw` 回调连接已确认的 SPI 面板芯片驱动或 RGB LTDC 帧缓冲，`touch` 回调可选。组件不依赖某个具体屏幕或触摸库。提供已命名的 `lvgl` CMake 目标后才能添加本组件；CubeMX/HAL 和 LVGL 的具体接法见[显示与触摸接入指南](https://github.com/NingZiXi/stm32-hal-lib/blob/main/docs/display-components.md)。
+独立于屏幕芯片，通过同步 draw 与可选 touch 回调接入 LVGL 9，默认 RGB565 PARTIAL。板级负责 tick、handler、总线、锁、色序和缓存。
 
-完整中文示例：[`examples/stm32_hal/README.md`](examples/stm32_hal/README.md)（含 LVGL tick、handler 与屏幕/触摸回调）。
+## 最小调用
 
 ```c
-static stm_lvgl_port_t port = {0};
-static uint8_t draw_buffer[BOARD_LCD_WIDTH * 20u * 2u]; /* RGB565，20 行 */
-stm_lvgl_port_config_t cfg = {
-    .width = BOARD_LCD_WIDTH, .height = BOARD_LCD_HEIGHT,
-    .draw_buffer = draw_buffer, .draw_buffer_bytes = sizeof(draw_buffer),
-    .display_context = &panel, .draw = board_draw,
-    /* 已确认 FT5206 时再设置 .touch_context 与 .touch。 */
+lvgl_port_handle_t port = NULL;
+lvgl_port_config_t cfg = {
+    .width=BOARD_LCD_WIDTH, .height=BOARD_LCD_HEIGHT,
+    .draw_buffer=draw_buffer, .draw_buffer_bytes=sizeof(draw_buffer),
+    .display_context=&board_display, .draw=board_draw,
+    .touch_context=&board_touch, .touch=board_touch_read, /* 无触摸设 NULL。 */
 };
 lv_init();
-int rc = stm_lvgl_port_attach(&port, &cfg);
-/* 应用提供 lv_tick_inc(实际经过的毫秒) 并定期调用 lv_timer_handler()。 */
+stm_err_t err = lvgl_port_create(&cfg, &port);
+lvgl_port_status_t status;
+if (err == STM_OK) err = lvgl_port_get_status(port, &status);
+/* 应用提供 tick 并周期调用 lv_timer_handler；退出时 lvgl_port_delete(&port)。 */
 ```
 
-`board_draw(context, x1, y1, x2, y2, pixels)` 的右下端点**不包含**；端口会把 LVGL 的包含式坐标转换好。缓冲区至少为完整一行 RGB565，回调要同步完成使用后再返回；异步 DMA 必须在返回前等待且处理缓存一致性。`touch(context, pressed, x, y)` 每次读指针时调用。最近一次错误保存在 `last_display_error` / `last_touch_error`，刷新失败也会交还 LVGL 缓冲。组件不负责 tick、任务同步、颜色转换或面板复位；退出前可调用 `stm_lvgl_port_detach`。目前主机测试通过，仍需在实板上核对方向、像素序和触摸范围。
+## 错误与资源契约
+
+所有操作和传输/复位回调返回 `stm_err_t`，成功为 `STM_OK`，失败检查 `err != STM_OK`，不能使用 `err < 0`。HAL 适配将 `HAL_TIMEOUT` 映射为 `STM_ERR_TIMEOUT`，`HAL_ERROR/HAL_BUSY` 映射为 `STM_ERR_IO`；组件原样传递回调错误，延时回调仍返回 void。
+
+| 情况 | 错误 |
+| --- | --- |
+| 空参数、非法调用参数 | `STM_ERR_INVALID_ARG` |
+| 缺少必需回调、尺寸或方向配置错误 | `STM_ERR_INVALID_CONFIG` |
+| 输出句柄非空、面板未初始化 | `STM_ERR_INVALID_STATE` |
+| 控制对象/LVGL 对象分配失败 | `STM_ERR_NO_MEM` |
+| 绘图越界或像素长度计算溢出 | `STM_ERR_OUT_OF_RANGE` |
+| GT9271 ID 不匹配 | `STM_ERR_NOT_SUPPORTED` |
+| 触摸帧点数等数据校验失败 | `STM_ERR_VERIFY` |
+
+`create(config, &handle)` 要求 handle 初始为 NULL；复制配置，用 calloc/free 管理小型控制对象，芯片 create 不访问硬件。创建失败保持输出为空；非空输出被拒绝且原值不变。`delete(&handle)` 仅回收拥有的对象，成功清空 handle，空句柄也成功；NULL 句柄地址是参数错误。删除前停止并发访问，其他别名不会被自动清空。
+
+板级拥有 HAL、总线、GPIO、背光、外部缓冲和回调上下文；组件不释放或重新配置这些资源。实例使用期间上下文必须有效，可用 NULL io 表示无上下文。应用串行调用，组件不默认线程安全，不在中断中调用阻塞操作，不增加日志/RTT/RTOS 依赖。同步传输返回前必须用完输入缓冲；共享总线在整笔事务外加锁，DMA/DCache 一致性由板级管理。
+
+## LVGL 对象与错误状态
+
+缓冲至少一行 RGB565，字节数不超过 UINT32_MAX，满足 LV_DRAW_BUF_ALIGN（未定义时至少 2 字节对齐）。LVGL 闭区间矩形由组件转换为半开区间一次。同步 draw 失败也调用 flush_ready 交还缓冲；输入错误、非法 pressed 或越界坐标上报松开，并由 get_status 返回最近错误，下一次成功更新为 STM_OK。
+
+create 分配控制对象、display、可选 indev，任何失败完整回收；delete 先释放 indev、再 display、再控制对象。应用必须先调用 lv_init，并停止所有 LVGL/组件并发访问后删除。
+
+get_display/get_indev 返回借用对象；无触摸时 indev 为 NULL。不得自行删除对象或替换 user_data，借用对象在 port 删除后失效。H757 板级在第一次渲染前通过 get_display 修改为 DIRECT 双缓冲、自定义 flush；其刷新错误独立记录，get_status 仅覆盖组件自身回调。组件不包含 DIRECT、DMA 或 VSYNC 自动配置。
+
+## CMake 与依赖
+
+依赖 `stm_common` 的 `stm_err.h`，不复制公共错误码。优先复用已有 `stm_common` target，其次找同级源码；缺失时自动下载固定 v1.0.0 提交 `ce3d186dde2d374a8e9c7b9068a7b88f97d57dc1`。可设置 `STM_COMMON_FETCH=OFF` 禁止下载，`STM_COMMON_GIT_REPOSITORY=https://gitee.com/nzxhg/stm_common.git` 指定镜像，或 `FETCHCONTENT_SOURCE_DIR_STM_COMMON` 指定离线源码。已有 target/同级源码无需网络。
 
 ```cmake
-# 先提供 LVGL 9 的目标 lvgl。
 add_subdirectory(Lib/stm_lvgl_port)
-target_link_libraries(app PRIVATE stm_lvgl_port) # app 改为你的实际目标名
+target_link_libraries(your_firmware PRIVATE stm_lvgl_port)
 ```
+
+手动集成时添加组件 include/源码及 stm_common 头文件目录。LVGL port 还要求应用提前提供 LVGL 9 的 `lvgl` target 和配置。
+
+## 从 v0.1.0 迁移
+
+| 旧接口 | 当前接口 |
+| --- | --- |
+| `stm_lvgl_port_t` 公开结构体 | `lvgl_port_handle_t`，初始 NULL |
+| `stm_lvgl_port_config_t` | `lvgl_port_config_t` |
+| `attach(实例地址, config)` | `lvgl_port_create(config, &handle)` |
+| 直接访问结构体 / 无销毁接口 | `get_display/get_indev/get_status，lvgl_port_delete(&handle)` |
+| int 与负数错误码 | `stm_err_t`，`err != STM_OK`，回调同步迁移 |
+
+旧 attach/detach 接口移除，不保留兼容包装。
+
+v0.1.0 与 H757、LVGL 9.3.0、ILI9881C/GT9271 已完成持续刷新、交互和复位观察；软件迁移版本尚未实板回归。
+
+## 软件验证与发布状态
+
+```sh
+cmake -S tests -B build/tests -G Ninja -DCMAKE_BUILD_TYPE=Debug
+cmake --build build/tests
+ctest --test-dir build/tests --output-on-failure
+```
+
+主机测试覆盖参数/配置、分配失败、资源回收、多实例和错误传递，并编译 C11/C++17 公共头文件。测试分配器仅用于测试构建，不加入产品固件。中文 HAL 示例见 [examples/stm32_hal/README.md](examples/stm32_hal/README.md)。许可证见 [LICENSE](LICENSE)。
+
+当前为未发布的 API 软件迁移；已发布 `v0.1.0` 保留旧接口，迁移后的硬件回归待完成，尚未发布 v0.2.0。
