@@ -2,6 +2,8 @@
 
 独立于屏幕芯片，通过同步 draw 与可选 touch 回调接入 LVGL 9，默认 RGB565 PARTIAL。板级负责 tick、handler、总线、锁、色序和缓存。
 
+接入方式、缓冲归属和切帧边界见 [PARTIAL / DIRECT 指南](docs/render-modes.md)。默认路径不需要板级 DIRECT 文件。
+
 ## 最小调用
 
 ```c
@@ -21,19 +23,18 @@ if (err == STM_OK) err = lvgl_port_get_status(port, &status);
 
 ## 错误与资源契约
 
-所有操作和传输/复位回调返回 `stm_err_t`，成功为 `STM_OK`，失败检查 `err != STM_OK`，不能使用 `err < 0`。HAL 适配将 `HAL_TIMEOUT` 映射为 `STM_ERR_TIMEOUT`，`HAL_ERROR/HAL_BUSY` 映射为 `STM_ERR_IO`；组件原样传递回调错误，延时回调仍返回 void。
+公开操作、draw 和 touch 返回 `stm_err_t`，成功为 `STM_OK`，失败检查 `err != STM_OK`。HAL 适配将 `HAL_TIMEOUT` 映射为 `STM_ERR_TIMEOUT`，`HAL_ERROR/HAL_BUSY` 映射为 `STM_ERR_IO`；组件原样记录回调错误。
 
 | 情况 | 错误 |
 | --- | --- |
-| 空参数、非法调用参数 | `STM_ERR_INVALID_ARG` |
-| 缺少必需回调、尺寸或方向配置错误 | `STM_ERR_INVALID_CONFIG` |
-| 输出句柄非空、面板未初始化 | `STM_ERR_INVALID_STATE` |
+| 空 API 参数、非法刷新参数或 pressed 值 | `STM_ERR_INVALID_ARG` |
+| 缺少 draw/缓冲、尺寸为零、缓冲大小或对齐不合法 | `STM_ERR_INVALID_CONFIG` |
+| 创建输出句柄非空 | `STM_ERR_INVALID_STATE` |
 | 控制对象/LVGL 对象分配失败 | `STM_ERR_NO_MEM` |
-| 绘图越界或像素长度计算溢出 | `STM_ERR_OUT_OF_RANGE` |
-| GT9271 ID 不匹配 | `STM_ERR_NOT_SUPPORTED` |
-| 触摸帧点数等数据校验失败 | `STM_ERR_VERIFY` |
+| 刷新矩形或有效触点越界 | `STM_ERR_OUT_OF_RANGE` |
+| draw/touch 适配失败 | 原始 `stm_err_t`，不折叠成统一通信错误 |
 
-`create(config, &handle)` 要求 handle 初始为 NULL；复制配置，用 calloc/free 管理小型控制对象，芯片 create 不访问硬件。创建失败保持输出为空；非空输出被拒绝且原值不变。`delete(&handle)` 仅回收拥有的对象，成功清空 handle，空句柄也成功；NULL 句柄地址是参数错误。删除前停止并发访问，其他别名不会被自动清空。
+`create(config, &handle)` 要求 handle 初始为 NULL；复制配置，以 calloc/free 管理控制对象和 LVGL 对象。创建失败保持输出为空；非空输出被拒绝且原值不变。组件没有面板 reset/init 生命周期，创建前应用自行准备屏幕、总线和 tick。`delete(&handle)` 仅回收拥有的对象，成功清空 handle，空句柄也成功；NULL 句柄地址是参数错误。删除前停止并发访问，其他别名不会被自动清空。
 
 板级拥有 HAL、总线、GPIO、背光、外部缓冲和回调上下文；组件不释放或重新配置这些资源。实例使用期间上下文必须有效，可用 NULL io 表示无上下文。应用串行调用，组件不默认线程安全，不在中断中调用阻塞操作，不增加日志/RTT/RTOS 依赖。同步传输返回前必须用完输入缓冲；共享总线在整笔事务外加锁，DMA/DCache 一致性由板级管理。
 
