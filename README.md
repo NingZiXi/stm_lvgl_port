@@ -82,3 +82,9 @@ ctest --test-dir build/tests --output-on-failure
 主机测试覆盖参数/配置、分配失败、资源回收、多实例和错误传递，并编译 C11/C++17 公共头文件。测试分配器仅用于测试构建，不加入产品固件。中文 HAL 示例见 [examples/stm32_hal/README.md](examples/stm32_hal/README.md)。许可证见 [LICENSE](LICENSE)。
 
 `v0.2.0` 采用不透明句柄、`create/delete` 和统一 `stm_err_t`，包含破坏性接口迁移，不保留旧接口包装。`v0.1.0` 继续保留；升级前按上表迁移类型、回调和生命周期。此版本的主机测试、C11/C++17 头文件、中文 HAL 示例及 H757 Debug/Release 集成构建已通过。
+
+## v0.2.1 文档补丁
+
+补充同步 PARTIAL 与板级 DIRECT 双缓冲的接入指南，明确帧缓冲归属、DCache clean、VSYNC 切帧、flush_ready 时机和独立错误记录；中文 HAL 示例同步更新。源码、公开 API 和 CMake 与 v0.2.0 完全相同，无需再次迁移接口。
+
+2026-10-07，H757 配套 ILI9881C/GT9271、LVGL 9.3.0 的板级呈现模块整理后完成独立回归：诊断 Debug 显示与触摸、连续五次复位、诊断 Release 启动及按钮计数、官方 Widgets Debug 滑动/点击正常，显示及输入错误均为 0。默认存储固件恢复后启动正常。本轮 PARTIAL 仅主机验证，未单独记录各角坐标、实测 FPS 基准或长期稳定性；结论限于该板级 RGB565 DIRECT 配置。
