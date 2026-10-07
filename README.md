@@ -68,7 +68,7 @@ target_link_libraries(your_firmware PRIVATE stm_lvgl_port)
 
 旧 attach/detach 接口移除，不保留兼容包装。
 
-v0.1.0 与 H757、LVGL 9.3.0、ILI9881C/GT9271 已完成持续刷新、交互和复位观察；软件迁移版本尚未实板回归。
+2026-10-07，`v0.2.0` 接口在 STM32H757XIH6 CB V1.0、WKS101HD031-WCT 10.1 寸 800×1280 模组（ILI9881C/GT9271）、LVGL 9.3.0 上完成回归：诊断显示持续刷新、按钮与触摸输入、五次连续软件复位及 Release 启动通过；官方 Widgets 的滑动、点击由用户现场确认正常，读取状态中刷新、输入和切帧错误均为 0。板级使用 RGB565 DIRECT 双缓冲，触摸 mirror_x=0、mirror_y=0；结论限于该组合，不代表其他模组已验证。 硬件回归使用 get_display 获取的借用对象进行板级 DIRECT 扩展；组件默认同步 PARTIAL 路径本轮通过主机测试，未单独进行实板验收。
 
 ## 软件验证与发布状态
 
@@ -80,4 +80,4 @@ ctest --test-dir build/tests --output-on-failure
 
 主机测试覆盖参数/配置、分配失败、资源回收、多实例和错误传递，并编译 C11/C++17 公共头文件。测试分配器仅用于测试构建，不加入产品固件。中文 HAL 示例见 [examples/stm32_hal/README.md](examples/stm32_hal/README.md)。许可证见 [LICENSE](LICENSE)。
 
-当前为未发布的 API 软件迁移；已发布 `v0.1.0` 保留旧接口，迁移后的硬件回归待完成，尚未发布 v0.2.0。
+`v0.2.0` 采用不透明句柄、`create/delete` 和统一 `stm_err_t`，包含破坏性接口迁移，不保留旧接口包装。`v0.1.0` 继续保留；升级前按上表迁移类型、回调和生命周期。此版本的主机测试、C11/C++17 头文件、中文 HAL 示例及 H757 Debug/Release 集成构建已通过。
