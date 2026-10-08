@@ -1,4 +1,8 @@
-/** @file test_allocator.h @brief 仅测试目标使用的分配故障注入。 */
+/**
+ * @file test_allocator.h
+ *
+ * @brief 仅测试目标使用的分配故障注入。
+ */
 #ifndef DISPLAY_TEST_ALLOCATOR_H
 #define DISPLAY_TEST_ALLOCATOR_H
 #include <stddef.h>

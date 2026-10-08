@@ -1,0 +1,28 @@
+# Component-local style; does not reformat CubeMX or other vendored libraries.
+BasedOnStyle: LLVM
+IndentWidth: 4
+TabWidth: 4
+UseTab: Never
+ColumnLimit: 100
+BreakBeforeBraces: Allman
+AllowShortFunctionsOnASingleLine: None
+AllowShortIfStatementsOnASingleLine: Never
+AllowShortLoopsOnASingleLine: false
+AllowShortBlocksOnASingleLine: Never
+AllowShortCaseLabelsOnASingleLine: false
+SeparateDefinitionBlocks: Always
+SortIncludes: Never
+IncludeBlocks: Preserve
+ReflowComments: false
+PointerAlignment: Right
+AlignAfterOpenBracket: Align
+BinPackArguments: true
+BinPackParameters: false
+
+# Keep public declarations and documentation unindented inside extern "C".
+IndentExternBlock: NoIndent
+
+# Compact trailing member comments; function docs stay multiline.
+AlignTrailingComments:
+  Kind: Always
+  OverEmptyLines: 0
