@@ -6,7 +6,7 @@
 
 ## 接入步骤
 
-1. 将组件和 stm_common 加入 CMake；LVGL port 先提供 LVGL 9 target。
+1. 将组件和 stm_common 加入 CMake；提前提供 LVGL 9 target，或按[中文主页](../../README.md)配置 lv_conf.h 后由组件获取固定 LVGL/使用离线源码。
 2. 将本目录两个源码文件复制到应用，替换 HAL 头文件和实际板级参数。
 3. 以 NULL 初始化句柄，按 example.h 的 start 接口创建；板级结构体必须持久有效。
 4. 循环绘图/读取触点或调用 LVGL handler，检查每一步 `err != STM_OK`。

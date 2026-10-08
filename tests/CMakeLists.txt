@@ -13,3 +13,10 @@ add_library(header_consumers OBJECT headers.c headers.cpp)
 target_compile_features(header_consumers PRIVATE c_std_11 cxx_std_17)
 target_link_libraries(header_consumers PRIVATE stm_lvgl_port)
 add_test(NAME contracts COMMAND test_component)
+
+find_package(Python3 REQUIRED COMPONENTS Interpreter)
+get_target_property(common_source stm_common SOURCE_DIR)
+add_test(NAME dependency_resolution COMMAND ${Python3_EXECUTABLE}
+    ${CMAKE_CURRENT_SOURCE_DIR}/test_dependency.py
+    --common-source ${common_source}
+    --c-compiler ${CMAKE_C_COMPILER} --cxx-compiler ${CMAKE_CXX_COMPILER})

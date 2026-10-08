@@ -50,12 +50,52 @@ get_display/get_indev 返回借用对象；无触摸时 indev 为 NULL。不得�
 
 依赖 `stm_common` 的 `stm_err.h`，不复制公共错误码。优先复用已有 `stm_common` target，其次找同级源码；缺失时自动下载固定 v1.0.0 提交 `ce3d186dde2d374a8e9c7b9068a7b88f97d57dc1`。可设置 `STM_COMMON_FETCH=OFF` 禁止下载，`STM_COMMON_GIT_REPOSITORY=https://gitee.com/nzxhg/stm_common.git` 指定镜像，或 `FETCHCONTENT_SOURCE_DIR_STM_COMMON` 指定离线源码。已有 target/同级源码无需网络。
 
+LVGL 仅支持 **9.x**，依赖解析顺序如下：
+
+1. 已有名为 `lvgl` 的 target：直接复用，不下载，也不改变其配置。
+2. 设置 `STM_LVGL_PORT_LVGL_SOURCE_DIR`：使用该离线源码目录；不下载。
+3. 设置 `FETCHCONTENT_SOURCE_DIR_LVGL`：通过 CMake FetchContent 使用离线源码；不下载。
+4. 均未提供时：默认从官方仓库获取 **v9.3.0** 固定提交 `c033a98afddd65aaafeebea625382a94020fe4a7`，下载与构建内容留在构建目录，不追踪 `main` 或最新 tag。
+
+| CMake 选项 | 默认值 | 用途 |
+| --- | --- | --- |
+| `STM_LVGL_PORT_FETCH_LVGL` | `ON` | 允许缺失时下载；`OFF` 不影响已有 target 或显式离线源码 |
+| `STM_LVGL_PORT_LVGL_SOURCE_DIR` | 空 | 离线 LVGL 9 源码根目录（含 `CMakeLists.txt`） |
+| `STM_LVGL_PORT_LVGL_GIT_REPOSITORY` | `https://github.com/lvgl/lvgl.git` | 官方仓库或含固定提交的可信镜像；不改变固定版本 |
+
+自动获取/离线源码路径使用 LVGL 上游 CMake；应用必须在添加组件前提供自己的 `lv_conf.h`，可用 `LV_BUILD_CONF_PATH` 指定文件，或 `LV_BUILD_CONF_DIR` 指定其目录（二者不能同时设置）。未指定时，上游寻找应用顶层目录的 `lv_conf.h`；缺失会配置失败。组件不会生成或修改配置，也不会设置 tick、handler、HAL、显存或 DIRECT 模式。
+
+这两条路径默认关闭 `CONFIG_LV_BUILD_DEMOS`、`CONFIG_LV_BUILD_EXAMPLES` 和 `CONFIG_LV_USE_THORVG_INTERNAL`，但尊重应用提前设置的值。使用 ThorVG 的应用须同时配置对应 LVGL 功能和 C++ 工具链；上游 CMake 本身要求 C/C++/ASM 工具链。已有 `lvgl` target 的选项和工具链仍由应用原接入方式管理。
+
 ```cmake
+# 应用准备适合自身资源和功能的 lv_conf.h（不要直接启用整个模板）。
+set(LV_BUILD_CONF_PATH "${CMAKE_CURRENT_SOURCE_DIR}/Config/lv_conf.h" CACHE PATH "LVGL application config")
 add_subdirectory(Lib/stm_lvgl_port)
 target_link_libraries(your_firmware PRIVATE stm_lvgl_port)
 ```
 
-手动集成时添加组件 include/源码及 stm_common 头文件目录。LVGL port 还要求应用提前提供 LVGL 9 的 `lvgl` target 和配置。
+离线示例（已有源码时可完全关闭下载）：
+
+```cmake
+set(STM_LVGL_PORT_FETCH_LVGL OFF CACHE BOOL "Disable LVGL download")
+set(STM_LVGL_PORT_LVGL_SOURCE_DIR "/absolute/path/to/lvgl" CACHE PATH "Offline LVGL 9")
+set(LV_BUILD_CONF_PATH "${CMAKE_CURRENT_SOURCE_DIR}/Config/lv_conf.h" CACHE PATH "LVGL application config")
+add_subdirectory(Lib/stm_lvgl_port)
+```
+
+关闭 LVGL 下载且未提供 target/离线源码时，配置阶段明确报错。LVGL 与 `stm_common` 的下载开关独立；完全离线还需提供 `stm_common` target/同级源码/源码覆盖并按需关闭其下载。手动集成时添加组件 include/源码、`stm_common` 头文件目录及 LVGL 9 库和配置。
+
+### 依赖与主机测试
+
+```sh
+cmake -S tests -B build/tests -G Ninja -DCMAKE_BUILD_TYPE=Debug
+cmake --build build/tests
+ctest --test-dir build/tests --output-on-failure
+python tests/test_dependency.py --lvgl-source /absolute/path/to/lvgl-9.3.0
+python tests/test_dependency.py --fetch
+```
+
+CTest 覆盖现有回调/生命周期契约、C11/C++17 头文件和离线 CMake 依赖解析（不访问网络）。`--lvgl-source` 额外使用真实 LVGL 9 源码编译、链接并运行最小主机消费程序；`--fetch` 额外检查下载及实际固定提交，可用 `--repository` 指定可信镜像。独立运行 Python 脚本时默认从同级 `stm_common` 读取公共头文件；若依赖位于其他位置，传入 `--common-source /absolute/path/to/stm_common`。主机检查不能替代实板显示、触摸、时序或缓存验证。
 
 ## 从 v0.1.0 迁移
 
@@ -88,3 +128,9 @@ ctest --test-dir build/tests --output-on-failure
 补充同步 PARTIAL 与板级 DIRECT 双缓冲的接入指南，明确帧缓冲归属、DCache clean、VSYNC 切帧、flush_ready 时机和独立错误记录；中文 HAL 示例同步更新。源码、公开 API 和 CMake 与 v0.2.0 完全相同，无需再次迁移接口。
 
 2026-10-07，H757 配套 ILI9881C/GT9271、LVGL 9.3.0 的板级呈现模块整理后完成独立回归：诊断 Debug 显示与触摸、连续五次复位、诊断 Release 启动及按钮计数、官方 Widgets Debug 滑动/点击正常，显示及输入错误均为 0。默认存储固件恢复后启动正常。本轮 PARTIAL 仅主机验证，未单独记录各角坐标、实测 FPS 基准或长期稳定性；结论限于该板级 RGB565 DIRECT 配置。
+
+## v0.3.0 LVGL 固定版本自动获取
+
+新增 CMake 依赖解析：已有 `lvgl` target 优先，其次使用显式离线源码，缺失时自动获取 LVGL v9.3.0 固定提交。下载开关、离线源码覆盖和可信镜像均可由应用配置；C API 与 v0.2.x 保持兼容。应用仍负责 `lv_conf.h`、tick、handler、HAL 和缓冲配置。
+
+2026-10-08，通过主机契约与 C11/C++17 头文件检查、11 种隔离 CMake 依赖/失败路径检查，以及真实 LVGL v9.3.0 的离线源码、FetchContent 源码覆盖和在线固定提交获取后的编译、链接与最小实例创建/销毁测试；H757 HAL 示例和真实 LVGL 头文件/实现编译通过。本版未重新完成消费工程全固件链接或实板回归，v0.2.x 的硬件记录不作为 v0.3.0 验收结论。
