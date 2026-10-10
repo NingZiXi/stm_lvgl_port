@@ -1,3 +1,7 @@
+/**
+ * @file    test_lvgl.c
+ * @brief   验证组件主机回归，不替代实板验收。
+ */
 #include "stm_lvgl_port.h"
 #include "test_allocator.h"
 #include "stm_lcd_impl.h"
@@ -465,7 +469,7 @@ int main(void)
            data.state == LV_INDEV_STATE_RELEASED);
     lv_display_set_flush_cb(display, direct_flush);
     display->flush(display, &area, (uint8_t *)buffer);
-    assert(display->ready == 6); /* 借用对象允许板级替换刷新路径。 */
+    assert(display->ready == 6); // 借用对象允许板级替换刷新路径。
     assert(lvgl_port_delete(&port) == STM_OK && !port && deletion_count == 2 &&
            deletion_order[0] == 'i' && deletion_order[1] == 'd');
     assert(lvgl_port_delete(&port) == STM_OK);
@@ -481,17 +485,17 @@ int main(void)
     cfg.panel = &m.panel;
     cfg.touch = NULL;
     cfg.draw_async = 1;
-    assert(lvgl_port_create(&cfg, &port) == STM_ERR_INVALID_CONFIG); /* Need wait. */
+    assert(lvgl_port_create(&cfg, &port) == STM_ERR_INVALID_CONFIG); // 异步模式必须提供完成服务。
     m.io.ops = &io_ops;
     cfg.draw_async = 2;
     assert(lvgl_port_create(&cfg, &port) == STM_ERR_INVALID_CONFIG);
     cfg.draw_async = 1;
     cfg.draw_buffer2 = buffer;
-    assert(lvgl_port_create(&cfg, &port) == STM_ERR_INVALID_CONFIG); /* Aliasing. */
+    assert(lvgl_port_create(&cfg, &port) == STM_ERR_INVALID_CONFIG); // 拒绝相同缓冲地址。
     cfg.draw_buffer2 = (uint8_t *)buffer + 2;
-    assert(lvgl_port_create(&cfg, &port) == STM_ERR_INVALID_CONFIG); /* Overlap. */
+    assert(lvgl_port_create(&cfg, &port) == STM_ERR_INVALID_CONFIG); // 拒绝重叠缓冲。
     cfg.draw_buffer2 = (uint8_t *)second + 1;
-    assert(lvgl_port_create(&cfg, &port) == STM_ERR_INVALID_CONFIG); /* Alignment. */
+    assert(lvgl_port_create(&cfg, &port) == STM_ERR_INVALID_CONFIG); // 拒绝未对齐缓冲。
     cfg.draw_buffer2 = second;
     assert(lvgl_port_create(&cfg, &port) == STM_OK);
     m.port = port;
@@ -501,16 +505,16 @@ int main(void)
     assert(stm_lcd_io_complete(&m.io, STM_OK) == STM_ERR_INVALID_STATE);
     m.draw_error = STM_OK;
     display->flush(display, &area, (uint8_t *)buffer);
-    assert(display->ready == 0); /* Submission is not completion. */
+    assert(display->ready == 0); // 提交成功不等于完成。
     assert(lvgl_port_delete(&port) == STM_ERR_INVALID_STATE && port);
     unsigned before = m.drawings;
     display->flush(display, &area, (uint8_t *)second);
-    assert(m.drawings == before && display->ready == 0); /* No overlapping submit. */
+    assert(m.drawings == before && display->ready == 0); // 不允许重叠提交。
     display->wait(display);
     assert(display->ready == 1 && m.waits == 1);
     assert(stm_lcd_io_complete(&m.io, STM_OK) == STM_ERR_INVALID_STATE);
     display->wait(display);
-    assert(m.waits == 1); /* Completed wait does nothing. */
+    assert(m.waits == 1); // 已完成的等待不重复通知。
     display->flush(display, &area, (uint8_t *)second);
     m.draw_error = STM_ERR_IO;
     display->wait(display);
@@ -518,19 +522,19 @@ int main(void)
     assert(lvgl_port_get_status(port, &status) == STM_OK &&
            status.last_display_error == STM_ERR_IO);
     display->flush(display, &area, (uint8_t *)buffer);
-    assert(display->ready == 3); /* Immediate submission failure releases once. */
+    assert(display->ready == 3); // 立即提交失败仅归还一次。
     m.inline_complete = 1;
     display->flush(display, &area, (uint8_t *)second);
     assert(display->ready == 4);
     assert(lvgl_port_get_status(port, &status) == STM_OK &&
            status.last_display_error == STM_ERR_IO);
     assert(lvgl_port_delete(&port) == STM_OK && !test_alloc_live && !live_displays);
-    /* Appended policies are opt-in and validated; defaults retain old behavior. */
+    // 验证可选刷新策略与默认配置。
     cfg.draw_async = 0;
     cfg.draw_buffer2 = NULL;
     m.io.ops = &sync_io_ops;
     cfg.refresh_align_rows = 2;
-    assert(lvgl_port_create(&cfg, &port) == STM_ERR_INVALID_CONFIG); /* 1-row buffer. */
+    assert(lvgl_port_create(&cfg, &port) == STM_ERR_INVALID_CONFIG); // 单行缓冲。
     uint16_t full_buffer[4] = {0};
     cfg.draw_buffer = full_buffer;
     cfg.draw_buffer_bytes = sizeof full_buffer;
@@ -572,7 +576,7 @@ int main(void)
     assert(lvgl_port_get_status(port, &status) == STM_OK && !status.flush_pending &&
            status.last_display_error == STM_ERR_IO);
     assert(lvgl_port_delete(&port) == STM_OK && !test_alloc_live && !live_displays);
-    /* Slow independent IO completion continues touch sampling, without LVGL recursion. */
+    // 等待慢速 IO 完成时仍采样触摸，不递归 LVGL。
     cfg.latch_display_error = 0;
     cfg.draw_async = 1;
     cfg.touch = &m.touch;

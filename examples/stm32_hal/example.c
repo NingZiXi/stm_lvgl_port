@@ -1,7 +1,6 @@
 /**
- * @file example.c
- *
- * @brief Generic device handles in, one cooperative process entry out.
+ * @file    example.c
+ * @brief   演示通用LVGL接入及板级配置边界。
  */
 #include "example.h"
 

@@ -1,7 +1,6 @@
 /**
- * @file stm_lvgl_port.c
- *
- * @brief 同步/异步刷新、输入及 LVGL 对象生命周期。
+ * @file    stm_lvgl_port.c
+ * @brief   实现同步及异步刷新、输入服务和 LVGL 对象生命周期。
  */
 #include "stm_lvgl_port.h"
 #include <limits.h>
@@ -17,15 +16,15 @@ struct lvgl_port_context
     lv_display_t *display;
     lv_indev_t *indev;
     lvgl_port_status_t status;
-    uint8_t flush_pending; /**< 缓冲仍被传输层借用，仅主循环访问。 */
+    uint8_t flush_pending; // 缓冲仍被传输层借用，仅主循环访问。
     uint32_t transfer_pixels;
     stm_err_t display_fault;
     uint32_t last_poll, last_probe, last_handler;
     uint8_t online, pressed, processing, observing, subscribed, touch_claimed;
-    uint16_t last_touch_x, last_touch_y; /**< 最后有效按下坐标，释放时保留。 */
+    uint16_t last_touch_x, last_touch_y; // 最后有效按下坐标，释放时保留。
 };
 
-/* Expand invalidation BEFORE the software renderer touches either buffer. */
+// 在渲染前扩展脏区域。
 static void round_area(lv_event_t *event)
 {
     lvgl_port_handle_t port = lv_event_get_user_data(event);
@@ -58,7 +57,7 @@ static void observe(lvgl_port_handle_t port, stm_err_t result, int complete)
     }
 }
 
-/* Keep the port linkable with non-software renderers too. */
+// 未启用软件渲染时使用通用字节交换。
 static void swap_rgb565(uint8_t *pixels, uint32_t count)
 {
 #if defined(LV_USE_DRAW_SW) && LV_USE_DRAW_SW
@@ -86,7 +85,7 @@ static void flush(lv_display_t *display, const lv_area_t *area, uint8_t *pixels)
     if (port->flush_pending)
     {
         port->status.last_display_error = STM_ERR_INVALID_STATE;
-        return; /* Never release the previous transfer's buffer prematurely. */
+        return; // 上一笔传输完成前不得归还像素缓冲。
     }
     port->flush_pending = 1;
     port->transfer_pixels = 0;
@@ -118,7 +117,7 @@ static void flush(lv_display_t *display, const lv_area_t *area, uint8_t *pixels)
                                                         : stm_lcd_panel_draw_bitmap)(
                 port->config.panel, (uint16_t)area->x1, (uint16_t)area->y1,
                 (uint16_t)(area->x2 + 1), (uint16_t)(area->y2 + 1), pixels);
-            /* A main-loop adapter may finish inline; preserve its completion error. */
+            // 保留提交内立即完成的错误结果。
             if (port->flush_pending)
                 port->status.last_display_error = result;
         }
@@ -185,8 +184,8 @@ static void sample_touch(lvgl_port_handle_t port, uint32_t now)
 
 static void service(lvgl_port_handle_t port, uint32_t now)
 {
-    stm_lcd_io_process(port->config.io); /* Always drain, even with latched faults. */
-    sample_touch(port, now);             /* Independent I2C, never recursively enters LVGL. */
+    stm_lcd_io_process(port->config.io); // 错误锁存后仍服务在途 IO。
+    sample_touch(port, now);             // 服务独立 I2C 输入，不递归进入 LVGL。
 }
 
 static void wait_flush(lv_display_t *display)
@@ -442,7 +441,7 @@ stm_err_t lvgl_port_process(lvgl_port_handle_t port, uint32_t now)
     if (port->processing || port->observing)
         return STM_ERR_INVALID_CONTEXT;
     port->processing = 1;
-    port->status.last_handler_ms = 0; /* No repeated accounting on non-handler calls. */
+    port->status.last_handler_ms = 0; // 未运行 handler 时清零本次耗时。
     service(port, now);
     if ((uint32_t)(now - port->last_handler) >= port->config.handler_period_ms &&
         port->display_fault == STM_OK)

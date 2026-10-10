@@ -1,3 +1,7 @@
+/**
+ * @file    test_allocator.c
+ * @brief   实现测试专用分配故障注入。
+ */
 #include "test_allocator.h"
 #include <assert.h>
 #include <stdlib.h>

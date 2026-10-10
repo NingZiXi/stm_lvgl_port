@@ -1,3 +1,7 @@
+/**
+ * @file    lvgl.h
+ * @brief   提供主机测试使用的 LVGL 接口替身。
+ */
 #ifndef LVGL_H
 #define LVGL_H
 #include <stdint.h>
