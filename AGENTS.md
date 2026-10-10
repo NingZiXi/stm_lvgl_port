@@ -53,4 +53,4 @@ python tests/test_dependency.py --lcd-source /absolute/path/to/stm_lcd --common-
 
 需要 Python 3；无真实源码时可省略 --lvgl-source 仅检查 mock/解析并明确未验证真实渲染。默认不访问网络；--fetch 是显式网络测试，固定版本不可漂移。--build-dir 可指定新目录留存日志。
 
-当前提交的扩展要求匹配的 stm_lcd 源码（STM_LCD_FRAMEBUFFER_API=1）；已发布 v1.0.0 不够。除 mock/依赖检查外，使用 `tests/real_lvgl` 的本地 LVGL 9.3.0 运行 PARTIAL/DIRECT 渲染回归；软件模型不等于 MCU 实板。
+port v1.1.0 要求 stm_lcd v1.1.0 能力（STM_LCD_FRAMEBUFFER_API=1）；框架旧 v1.0.0 不够。除 mock/依赖检查外，使用 `tests/real_lvgl` 的本地 LVGL 9.3.0 运行 PARTIAL/DIRECT 渲染回归；软件模型不等于 MCU 实板。

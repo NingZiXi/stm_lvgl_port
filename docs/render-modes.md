@@ -1,6 +1,6 @@
 # 渲染模式与缓冲所有权
 
-本说明对应当前提交的通用接口扩展（尚无新正式版本）；已发布 port v1.0.0 只有 PARTIAL。两种模式均为 RGB565，默认 PARTIAL。应用/平台负责实际内存布局、DCache 与扫描硬件；port 只通过通用面板能力连接 LVGL。
+本说明对应 port v1.1.0 的通用接口扩展，需要 stm_lcd v1.1.0；原 port v1.0.0 只有 PARTIAL。两种模式均为 RGB565，默认 PARTIAL。应用/平台负责实际内存布局、DCache 与扫描硬件；port 只通过通用面板能力连接 LVGL。
 
 ## PARTIAL：紧密区域
 

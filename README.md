@@ -1,8 +1,10 @@
 # stm_lvgl_port
 
+[![版本 v1.1.0](https://img.shields.io/badge/version-v1.1.0-blue)](https://github.com/NingZiXi/stm_lvgl_port/releases/tag/v1.1.0)
+
 LVGL 9 的芯片无关粘合层，接收 `stm_lcd` 通用 IO/panel/可选 touch 句柄。默认 RGB565 PARTIAL，可显式选择 DIRECT 双整帧；应用提供缓冲、时钟与板级能力，port 不操作 HAL、不分配大帧缓冲、不新增线程。
 
-**版本边界：** 已发布 `v1.0.0` 为通用句柄 PARTIAL 基线；本文描述当前提交的扩展，尚无新的正式版本。DIRECT 与原子寄存器需要匹配的 `stm_lcd` 提交（`STM_LCD_FRAMEBUFFER_API=1`），不能把本 README 套用到旧 tag。原 tag 保留，聚合仓库 gitlink 固定迁移组合；迁移提交同步 GitHub/Gitee，不新增 tag 或 Release。2026-10-11 的 H757 DIRECT Debug 实板范围见下文。
+**版本边界：** `v1.1.0` 在 `v1.0.0` 通用句柄 PARTIAL 基线上兼容增加 DIRECT 与帧缓冲生命周期支持，默认仍为 PARTIAL。需要 `stm_lcd v1.1.0` 能力（`STM_LCD_FRAMEBUFFER_API=1`）；框架旧 `v1.0.0` 不满足该依赖。旧 tag 保留，聚合仓库 gitlink 固定正式组合；2026-10-11 的 H757 DIRECT Debug 实板范围见下文。
 
 ## 🤖 让 Agent 帮助接入
 
@@ -76,7 +78,7 @@ config.refresh_align_rows = 0;
 
 ```cmake
 add_subdirectory(Lib/stm_common)
-add_subdirectory(Lib/stm_lcd) # 匹配本次扩展的本地框架
+add_subdirectory(Lib/stm_lcd) # stm_lcd v1.1.0 或匹配能力的本地框架
 # 按所需型号添加芯片组件，完成 HAL IO 与设备创建。
 # 应用提供 lv_conf.h 和 LV_BUILD_CONF_PATH，或已有 lvgl target。
 set(STM_LVGL_PORT_LVGL_SOURCE_DIR /path/to/lvgl-9.3.0 CACHE PATH "")
@@ -87,7 +89,7 @@ target_link_libraries(your_firmware PRIVATE stm_lvgl_port)
 
 LVGL 解析：已有 `lvgl` target → 显式源码 `STM_LVGL_PORT_LVGL_SOURCE_DIR` → FetchContent 离线覆盖 `FETCHCONTENT_SOURCE_DIR_LVGL` → 缺失时固定 9.3.0 提交 `c033a98afddd65aaafeebea625382a94020fe4a7`。默认关闭额外 LVGL demos/examples/internal ThorVG 构建，但尊重应用已设值；不修改供应商源码。镜像可设 `STM_LVGL_PORT_LVGL_GIT_REPOSITORY`，下载开关如上，无效显式目录失败。
 
-`stm_lcd` 只复用已有 target 或同级源码，不由 port 下载。`stm_common` 优先已有 target/同级源码，否则固定 v1.0.0 提交 `ce3d186dde2d374a8e9c7b9068a7b88f97d57dc1`，支持 STM_COMMON_FETCH、STM_COMMON_GIT_REPOSITORY 与 FETCHCONTENT_SOURCE_DIR_STM_COMMON。公开链接 LVGL、common 与 lcd。已有 target 的实际版本由消费工程验证。
+`stm_lcd` 要求 v1.1.0 能力，只复用已有 target 或同级源码，不由 port 下载。`stm_common` 优先已有 target/同级源码，否则固定 v1.0.0 提交 `ce3d186dde2d374a8e9c7b9068a7b88f97d57dc1`，支持 STM_COMMON_FETCH、STM_COMMON_GIT_REPOSITORY 与 FETCHCONTENT_SOURCE_DIR_STM_COMMON。公开链接 LVGL、common 与 lcd。已有 target 的实际版本由消费工程验证。
 
 ## 迁移与软件验证
 
@@ -118,7 +120,7 @@ LVGL-Debug 诊断固件通过 ST-Link 双核烧录独立读回、持续刷新、
 create 自动完成初始化后再校验实际跨度，应用无需预先 lv_init()。
 
 Debug/Release 消费固件已构建；本次未重新烧录 Release、Widgets 或 PARTIAL，未覆盖其他芯片实物、
-掉电复位、长期稳定性、色序/边角坐标量化或性能基准。该记录仅对应本次迁移提交组合，原正式 tag 不含本次扩展。
-日志、固件 SHA256、源码哈希和备份留在消费工程本地构建目录；迁移提交已同步 GitHub/Gitee，尚未发布包含扩展的新 tag 或 Release。
+掉电复位、长期稳定性、色序/边角坐标量化或性能基准。该记录对应 v1.1.0 所含源码；原 v1.0.0 tag 不含本次扩展。
+日志、固件 SHA256、源码哈希和备份留在消费工程本地构建目录；v1.1.0 tag 同步 GitHub/Gitee，并在 GitHub 提供对应 Release。
 
 [MIT](LICENSE)。

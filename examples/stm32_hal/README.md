@@ -10,4 +10,4 @@
 
 DIRECT 需显式 render_mode、两块完整紧密 RGB565 帧和平台整套 present/process/busy/stop_scanout；应用不替换 display 的 port flush/wait 回调。平台完成与 DCache/VSYNC 责任见[渲染模式](../../docs/render-modes.md)。
 
-原 port v0.3.0 的回调连接及手动 tick 示例不适用于本工作区；公开 v1.0.0 也不含 DIRECT。2026-10-11，本地 port 在 H757 + ILI9881C/GT9271 上通过 DIRECT 诊断 Debug 显示/触摸和五次软件复位；PARTIAL 与其他面板实板范围不变，见[组件 README](../../README.md)。create 自动初始化 LVGL 后检查行跨度，应用不需要预先 lv_init()。
+原 port v0.3.0 的回调连接及手动 tick 示例不适用于本工作区；原 v1.0.0 也不含 DIRECT，本示例使用 port v1.1.0 与 stm_lcd v1.1.0。2026-10-11，port 在 H757 + ILI9881C/GT9271 上通过 DIRECT 诊断 Debug 显示/触摸和五次软件复位；PARTIAL 与其他面板实板范围不变，见[组件 README](../../README.md)。create 自动初始化 LVGL 后检查行跨度，应用不需要预先 lv_init()。
