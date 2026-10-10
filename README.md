@@ -1,5 +1,7 @@
 # stm_lvgl_port
 
+[![version 1.0.0](https://img.shields.io/badge/version-1.0.0-5364b5?style=flat-square)](https://github.com/NingZiXi/stm_lvgl_port/releases/tag/v1.0.0)
+
 LVGL 9 的轻量显示/输入粘合层。接收通用 IO、面板、可选触摸、外部 RGB565 缓冲及运行策略，自动连接刷新完成和触摸服务。无芯片判断、HAL 依赖、后台任务或大块帧缓冲自动分配。
 
 ## 🤖 让 Agent 帮助接入
@@ -141,6 +143,6 @@ python tests/test_dependency.py --lcd-source /absolute/path/to/stm_lcd --common-
 
 2026-10-10，消费工程在 STM32F407 + AXS15231B、21 MHz SPI、170×560 原生竖屏、RGB565、两个 16 行普通 SRAM 缓冲的配置下完成显示和触摸验收。当前文档整理不改变这一运行配置。
 
-该结果不等于其他模组、其他 MCU 或长时间稳定性验收；既有触摸畸形帧问题不能标记为已修复。统一接口已替换旧 API，接入时以实际检出的公开头文件及提交为准，不将其视为旧版本兼容补丁，也不把依赖固定提交当作正式 Release。
+该结果不等于其他模组、其他 MCU 或长时间稳定性验收；既有触摸畸形帧问题不能标记为已修复。当前正式版本为 `v1.0.0`，统一接口不兼容重构前 API；接入时以该版本公开头文件为准，不将旧版本的接口或验收结论套用到本版本。
 
 维护者的 MIT 许可证保持原内容，见 [LICENSE](LICENSE)。源码中已有的第三方来源及许可说明保持保留。Agent 工作约束见 [AGENTS.md](AGENTS.md)。
