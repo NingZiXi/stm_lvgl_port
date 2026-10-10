@@ -1,5 +1,6 @@
 #include "stm_lvgl_port.h"
 #include "test_allocator.h"
+#include "stm_lcd_impl.h"
 #include <assert.h>
 #include <string.h>
 static lv_display_t displays[4];
@@ -58,14 +59,20 @@ void *lv_display_get_user_data(lv_display_t *d)
 
 void lv_display_set_buffers(lv_display_t *d, void *a, void *b, uint32_t n, int mode)
 {
-    (void)d;
-    assert(a && !b && n >= 4 && mode == LV_DISPLAY_RENDER_MODE_PARTIAL);
+    assert(a && n >= 4 && mode == LV_DISPLAY_RENDER_MODE_PARTIAL);
+    d->buffers[0] = a;
+    d->buffers[1] = b;
 }
 
 void lv_display_set_flush_cb(lv_display_t *d,
                              void (*cb)(lv_display_t *, const lv_area_t *, uint8_t *))
 {
     d->flush = cb;
+}
+
+void lv_display_set_flush_wait_cb(lv_display_t *d, void (*cb)(lv_display_t *))
+{
+    d->wait = cb;
 }
 
 void lv_display_flush_ready(lv_display_t *d)
@@ -132,27 +139,41 @@ void lv_indev_set_read_cb(lv_indev_t *i, void (*cb)(lv_indev_t *, lv_indev_data_
 
 typedef struct
 {
-    unsigned drawings;
+    struct stm_lcd_io io, touch_io;
+    struct stm_lcd_panel panel;
+    struct stm_lcd_touch touch;
+    lvgl_port_handle_t port;
+    unsigned waits;
+    unsigned inline_complete;
+    unsigned drawings, touch_reads, delay_polls, observations;
     stm_err_t draw_error, touch_error;
     int pressed;
     uint16_t x, y;
 } mock_t;
 
-static stm_err_t
-draw(void *ctx, uint16_t x1, uint16_t y1, uint16_t x2, uint16_t y2, const void *pixels)
+static stm_err_t draw(stm_lcd_panel_handle_t panel,
+                      uint16_t x1,
+                      uint16_t y1,
+                      uint16_t x2,
+                      uint16_t y2,
+                      const void *pixels)
 {
-    mock_t *m = ctx;
+    mock_t *m = panel->io->context;
     assert(x1 == 0 && y1 == 0 && x2 == 2 && y2 == 1 && pixels);
     ++m->drawings;
     return m->draw_error;
 }
 
-static stm_err_t touch(void *ctx, int *pressed, uint16_t *x, uint16_t *y)
+static stm_err_t touch_read(stm_lcd_touch_handle_t t, stm_lcd_touch_point_t *p, size_t *count)
 {
-    mock_t *m = ctx;
-    *pressed = m->pressed;
-    *x = m->x;
-    *y = m->y;
+    mock_t *m = t->io->context;
+    ++m->touch_reads;
+    *count = m->pressed ? 1 : 0;
+    p->x = m->x;
+    p->y = m->y;
+    p->id = 0;
+    if (m->pressed != 0 && m->pressed != 1)
+        return STM_ERR_VERIFY;
     return m->touch_error;
 }
 
@@ -163,11 +184,181 @@ static void direct_flush(lv_display_t *display, const lv_area_t *area, uint8_t *
     lv_display_flush_ready(display);
 }
 
+static uint32_t tick;
+
+static void async_wait(void *context)
+{
+    mock_t *m = context;
+    ++m->waits;
+    if (m->delay_polls)
+    {
+        --m->delay_polls;
+        tick += 20;
+        return;
+    }
+    assert(stm_lcd_io_complete(&m->io, m->draw_error) == STM_OK);
+}
+
+static int initialized;
+
+void lv_init(void)
+{
+    initialized = 1;
+}
+
+int lv_is_initialized(void)
+{
+    return initialized;
+}
+
+void lv_tick_set_cb(uint32_t (*cb)(void))
+{
+    assert(cb);
+}
+
+uint32_t lv_timer_handler(void)
+{
+    return 10;
+}
+
+static uint32_t clock_ms(void)
+{
+    return tick;
+}
+
+static void destroy_panel(stm_lcd_panel_handle_t p)
+{
+    (void)p;
+}
+
+static void destroy_touch(stm_lcd_touch_handle_t t)
+{
+    (void)t;
+}
+
+static stm_err_t io_submit(void *context, uint8_t cmd, const void *p, size_t n)
+{
+    mock_t *m = context;
+    (void)cmd;
+    (void)p;
+    (void)n;
+    if (m->inline_complete)
+    {
+        assert(stm_lcd_io_complete(&m->io, STM_ERR_IO) == STM_OK);
+        return STM_OK;
+    }
+    return m->draw_error;
+}
+
+static stm_err_t draw_async(stm_lcd_panel_handle_t p,
+                            uint16_t x1,
+                            uint16_t y1,
+                            uint16_t x2,
+                            uint16_t y2,
+                            const void *pixels)
+{
+    mock_t *m = p->io->context;
+    assert(x1 == 0 && y1 == 0 && x2 == 2 && y2 == 1 && pixels);
+    ++m->drawings;
+    return stm_lcd_io_tx_color_async(p->io, 0x2c, pixels, 4);
+}
+
+static const stm_lcd_io_ops_t io_ops = {.tx_color_async = io_submit, .process = async_wait};
+static const stm_lcd_io_ops_t sync_io_ops = {0};
+static const stm_lcd_touch_ops_t touch_ops = {.read_data = touch_read, .destroy = destroy_touch};
+static const stm_lcd_panel_ops_t panel_ops = {
+    .draw = draw, .draw_async = draw_async, .destroy = destroy_panel};
+
+static void init_mock(mock_t *m)
+{
+    assert(stm_lcd_io_init(&m->io, &sync_io_ops, m) == STM_OK);
+    assert(stm_lcd_io_init(&m->touch_io, &sync_io_ops, m) == STM_OK);
+    assert(stm_lcd_panel_base_init(&m->panel, &panel_ops, &m->io, 2, 2) == STM_OK);
+    stm_lcd_touch_config_t c = {.x_max = 2, .y_max = 2};
+    assert(stm_lcd_touch_base_init(&m->touch, &touch_ops, &m->touch_io, &c) == STM_OK);
+}
+
+static void sample(lvgl_port_handle_t p)
+{
+    tick += 1001;
+    assert(lvgl_port_process(p, tick) == STM_OK);
+}
+
+static void guarded_observer(void *context, uint32_t pixels, stm_err_t result, int complete)
+{
+    mock_t *m = context;
+    (void)pixels;
+    (void)result;
+    (void)complete;
+    ++m->observations;
+    assert(lvgl_port_process(m->port, tick) == STM_ERR_INVALID_CONTEXT);
+    lvgl_port_handle_t alias = m->port;
+    assert(lvgl_port_delete(&alias) == STM_ERR_INVALID_STATE && alias == m->port);
+}
+
+static int fail_event;
+
+void *lv_event_get_user_data(lv_event_t *e)
+{
+    return e->user;
+}
+
+lv_area_t *lv_event_get_invalidated_area(lv_event_t *e)
+{
+    return e->area;
+}
+
+uint32_t lv_display_get_event_count(lv_display_t *d)
+{
+    return d->event_count;
+}
+
+void lv_display_add_event_cb(lv_display_t *d, void (*cb)(lv_event_t *), int code, void *user)
+{
+    assert(code == LV_EVENT_INVALIDATE_AREA);
+    if (fail_event)
+        return;
+    d->event_cb = cb;
+    d->event_user = user;
+    ++d->event_count;
+}
+
+lv_timer_t *lv_indev_get_read_timer(lv_indev_t *i)
+{
+    return &i->timer;
+}
+
+void lv_timer_set_period(lv_timer_t *t, uint32_t period)
+{
+    t->period = period;
+}
+
+void lv_draw_sw_rgb565_swap(void *pixels, uint32_t count)
+{
+    uint8_t *p = pixels;
+    for (uint32_t i = 0; i < count; ++i, p += 2)
+    {
+        uint8_t tmp = p[0];
+        p[0] = p[1];
+        p[1] = tmp;
+    }
+}
+
 int main(void)
 {
     mock_t m = {.pressed = 1, .x = 1, .y = 1}, m2 = {0};
+    init_mock(&m);
+    init_mock(&m2);
     uint16_t buffer[2] = {0};
-    lvgl_port_config_t cfg = {2, 2, buffer, sizeof buffer, &m, draw, &m, touch}, bad;
+    lvgl_port_config_t cfg = {.width = 2,
+                              .height = 2,
+                              .draw_buffer = buffer,
+                              .draw_buffer_bytes = sizeof buffer,
+                              .io = &m.io,
+                              .panel = &m.panel,
+                              .clock_ms = clock_ms,
+                              .touch = &m.touch},
+                       bad;
     lvgl_port_handle_t port = NULL, other = NULL;
     lv_display_t *display = NULL, *other_display = NULL;
     lv_indev_t *indev = NULL;
@@ -177,7 +368,7 @@ int main(void)
     assert(lvgl_port_delete(NULL) == STM_ERR_INVALID_ARG);
     assert(lvgl_port_delete(&port) == STM_OK);
     bad = cfg;
-    bad.draw = NULL;
+    bad.panel = NULL;
     assert(lvgl_port_create(&bad, &port) == STM_ERR_INVALID_CONFIG);
     bad = cfg;
     bad.width = 0;
@@ -216,7 +407,8 @@ int main(void)
     assert(lvgl_port_get_status(port, NULL) == STM_ERR_INVALID_ARG);
     assert(lvgl_port_get_display(port, NULL) == STM_ERR_INVALID_ARG);
     assert(lvgl_port_get_indev(NULL, &indev) == STM_ERR_INVALID_ARG);
-    cfg.display_context = &m2;
+    cfg.io = &m2.io;
+    cfg.panel = &m2.panel;
     cfg.touch = NULL;
     assert(lvgl_port_create(&cfg, &other) == STM_OK && test_alloc_live == 2);
     assert(lvgl_port_get_display(other, &other_display) == STM_OK && other_display != display);
@@ -242,25 +434,33 @@ int main(void)
     display->flush(display, &area, (uint8_t *)buffer);
     assert(lvgl_port_get_status(port, &status) == STM_OK && status.last_display_error == STM_OK);
     lv_indev_data_t data = {0};
+    sample(port);
     indev->read(indev, &data);
     assert(data.state == LV_INDEV_STATE_PRESSED && data.point.x == 1 && data.point.y == 1);
     m.touch_error = STM_ERR_IO;
+    m.x = m.y = 0;
+    data.point.x = data.point.y = 0;
+    sample(port);
     indev->read(indev, &data);
-    assert(data.state == LV_INDEV_STATE_RELEASED && data.point.x == 0);
+    assert(data.state == LV_INDEV_STATE_RELEASED && data.point.x == 1 && data.point.y == 1);
     assert(lvgl_port_get_status(port, &status) == STM_OK && status.last_touch_error == STM_ERR_IO);
     m.touch_error = STM_OK;
     m.x = 2;
+    sample(port);
     indev->read(indev, &data);
-    assert(data.state == LV_INDEV_STATE_RELEASED);
-    assert(lvgl_port_get_status(port, &status) == STM_OK &&
-           status.last_touch_error == STM_ERR_OUT_OF_RANGE);
+    assert(data.state == LV_INDEV_STATE_RELEASED && data.point.x == 1 && data.point.y == 1);
+    assert(lvgl_port_get_status(port, &status) == STM_OK && status.last_touch_error == STM_OK);
     m.x = 1;
     m.pressed = 2;
+    sample(port);
     indev->read(indev, &data);
     assert(lvgl_port_get_status(port, &status) == STM_OK &&
-           status.last_touch_error == STM_ERR_INVALID_ARG);
+           status.last_touch_error == STM_ERR_VERIFY);
     m.pressed = 0;
+    m.x = m.y = 0;
+    sample(port);
     indev->read(indev, &data);
+    assert(data.point.x == 1 && data.point.y == 1);
     assert(lvgl_port_get_status(port, &status) == STM_OK && status.last_touch_error == STM_OK &&
            data.state == LV_INDEV_STATE_RELEASED);
     lv_display_set_flush_cb(display, direct_flush);
@@ -271,8 +471,128 @@ int main(void)
     assert(lvgl_port_delete(&port) == STM_OK);
     assert(lvgl_port_delete(&other) == STM_OK && !test_alloc_live && !live_displays &&
            !live_inputs);
-    cfg.touch = touch;
+    cfg.touch = &m.touch;
+    cfg.io = &m.io;
+    cfg.panel = &m.panel;
     assert(lvgl_port_create(&cfg, &port) == STM_OK);
     assert(lvgl_port_delete(&port) == STM_OK && !test_alloc_live);
+    uint16_t second[2] = {0};
+    cfg.io = &m.io;
+    cfg.panel = &m.panel;
+    cfg.touch = NULL;
+    cfg.draw_async = 1;
+    assert(lvgl_port_create(&cfg, &port) == STM_ERR_INVALID_CONFIG); /* Need wait. */
+    m.io.ops = &io_ops;
+    cfg.draw_async = 2;
+    assert(lvgl_port_create(&cfg, &port) == STM_ERR_INVALID_CONFIG);
+    cfg.draw_async = 1;
+    cfg.draw_buffer2 = buffer;
+    assert(lvgl_port_create(&cfg, &port) == STM_ERR_INVALID_CONFIG); /* Aliasing. */
+    cfg.draw_buffer2 = (uint8_t *)buffer + 2;
+    assert(lvgl_port_create(&cfg, &port) == STM_ERR_INVALID_CONFIG); /* Overlap. */
+    cfg.draw_buffer2 = (uint8_t *)second + 1;
+    assert(lvgl_port_create(&cfg, &port) == STM_ERR_INVALID_CONFIG); /* Alignment. */
+    cfg.draw_buffer2 = second;
+    assert(lvgl_port_create(&cfg, &port) == STM_OK);
+    m.port = port;
+    assert(lvgl_port_get_display(port, &display) == STM_OK);
+    assert(display->wait && display->buffers[0] == buffer && display->buffers[1] == second);
+    assert(stm_lcd_io_complete(NULL, STM_OK) == STM_ERR_INVALID_ARG);
+    assert(stm_lcd_io_complete(&m.io, STM_OK) == STM_ERR_INVALID_STATE);
+    m.draw_error = STM_OK;
+    display->flush(display, &area, (uint8_t *)buffer);
+    assert(display->ready == 0); /* Submission is not completion. */
+    assert(lvgl_port_delete(&port) == STM_ERR_INVALID_STATE && port);
+    unsigned before = m.drawings;
+    display->flush(display, &area, (uint8_t *)second);
+    assert(m.drawings == before && display->ready == 0); /* No overlapping submit. */
+    display->wait(display);
+    assert(display->ready == 1 && m.waits == 1);
+    assert(stm_lcd_io_complete(&m.io, STM_OK) == STM_ERR_INVALID_STATE);
+    display->wait(display);
+    assert(m.waits == 1); /* Completed wait does nothing. */
+    display->flush(display, &area, (uint8_t *)second);
+    m.draw_error = STM_ERR_IO;
+    display->wait(display);
+    assert(display->ready == 2);
+    assert(lvgl_port_get_status(port, &status) == STM_OK &&
+           status.last_display_error == STM_ERR_IO);
+    display->flush(display, &area, (uint8_t *)buffer);
+    assert(display->ready == 3); /* Immediate submission failure releases once. */
+    m.inline_complete = 1;
+    display->flush(display, &area, (uint8_t *)second);
+    assert(display->ready == 4);
+    assert(lvgl_port_get_status(port, &status) == STM_OK &&
+           status.last_display_error == STM_ERR_IO);
+    assert(lvgl_port_delete(&port) == STM_OK && !test_alloc_live && !live_displays);
+    /* Appended policies are opt-in and validated; defaults retain old behavior. */
+    cfg.draw_async = 0;
+    cfg.draw_buffer2 = NULL;
+    m.io.ops = &sync_io_ops;
+    cfg.refresh_align_rows = 2;
+    assert(lvgl_port_create(&cfg, &port) == STM_ERR_INVALID_CONFIG); /* 1-row buffer. */
+    uint16_t full_buffer[4] = {0};
+    cfg.draw_buffer = full_buffer;
+    cfg.draw_buffer_bytes = sizeof full_buffer;
+    cfg.refresh_full_width = 2;
+    assert(lvgl_port_create(&cfg, &port) == STM_ERR_INVALID_CONFIG);
+    cfg.refresh_full_width = 1;
+    cfg.touch = &m.touch;
+    cfg.io = &m.io;
+    cfg.panel = &m.panel;
+    cfg.touch_period_ms = 17;
+    fail_event = 1;
+    assert(lvgl_port_create(&cfg, &port) == STM_ERR_NO_MEM && !port && !test_alloc_live);
+    fail_event = 0;
+    assert(lvgl_port_create(&cfg, &port) == STM_OK);
+    assert(lvgl_port_get_display(port, &display) == STM_OK);
+    assert(lvgl_port_get_indev(port, &indev) == STM_OK && indev->timer.period == 17);
+    lv_area_t rounded = {1, 1, 1, 1};
+    lv_event_t event = {&rounded, display->event_user};
+    display->event_cb(&event);
+    assert(rounded.x1 == 0 && rounded.x2 == 1 && rounded.y1 == 0 && rounded.y2 == 1);
+    assert(lvgl_port_delete(&port) == STM_OK);
+    cfg.refresh_align_rows = 0;
+    cfg.refresh_full_width = 0;
+    cfg.rgb565_swap = 1;
+    cfg.latch_display_error = 1;
+    cfg.touch = NULL;
+    assert(lvgl_port_create(&cfg, &port) == STM_OK);
+    m.port = port;
+    m.inline_complete = 0;
+    m.draw_error = STM_ERR_IO;
+    assert(lvgl_port_get_display(port, &display) == STM_OK);
+    full_buffer[0] = 0x1234;
+    display->flush(display, &area, (uint8_t *)full_buffer);
+    assert(full_buffer[0] == 0x3412);
+    before = m.drawings;
+    m.draw_error = STM_OK;
+    display->flush(display, &area, (uint8_t *)full_buffer);
+    assert(m.drawings == before && display->ready == 2 && full_buffer[0] == 0x3412);
+    assert(lvgl_port_get_status(port, &status) == STM_OK && !status.flush_pending &&
+           status.last_display_error == STM_ERR_IO);
+    assert(lvgl_port_delete(&port) == STM_OK && !test_alloc_live && !live_displays);
+    /* Slow independent IO completion continues touch sampling, without LVGL recursion. */
+    cfg.latch_display_error = 0;
+    cfg.draw_async = 1;
+    cfg.touch = &m.touch;
+    cfg.touch_period_ms = 20;
+    cfg.flush_observer = guarded_observer;
+    cfg.observer_context = &m;
+    m.io.ops = &io_ops;
+    m.draw_error = STM_OK;
+    m.delay_polls = 3;
+    m.pressed = 1;
+    m.x = m.y = 1;
+    assert(lvgl_port_create(&cfg, &port) == STM_OK);
+    m.port = port;
+    assert(lvgl_port_get_display(port, &display) == STM_OK);
+    before = m.touch_reads;
+    display->flush(display, &area, (uint8_t *)full_buffer);
+    display->wait(display);
+    assert(m.touch_reads >= before + 3 && m.observations == 2 && display->ready == 1);
+    assert(lvgl_port_get_status(port, &status) == STM_OK && status.touch_pressed &&
+           !status.flush_pending);
+    assert(lvgl_port_delete(&port) == STM_OK);
     return 0;
 }

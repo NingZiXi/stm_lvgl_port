@@ -1,10 +1,9 @@
 /**
  * @file example.c
  *
- * @brief 由应用统一初始化 LVGL 后注册 display/input。
+ * @brief Generic device handles in, one cooperative process entry out.
  */
 #include "example.h"
-static uint32_t last_tick_ms;
 
 stm_err_t lvgl_port_example_start(const lvgl_port_config_t *config, lvgl_port_handle_t *port)
 {
@@ -26,14 +25,11 @@ stm_err_t lvgl_port_example_start(const lvgl_port_config_t *config, lvgl_port_ha
     }
     lv_label_set_text(label, "STM32 LVGL");
     lv_obj_center(label);
-    last_tick_ms = HAL_GetTick();
+
     return STM_OK;
 }
 
-void lvgl_port_example_step(void)
+stm_err_t lvgl_port_example_step(lvgl_port_handle_t port, uint32_t now)
 {
-    uint32_t now = HAL_GetTick();
-    lv_tick_inc(now - last_tick_ms);
-    last_tick_ms = now;
-    (void)lv_timer_handler();
+    return lvgl_port_process(port, now);
 }

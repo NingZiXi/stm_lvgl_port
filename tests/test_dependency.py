@@ -43,6 +43,10 @@ def check(args, root):
     # 使用调用方实际选择的公共错误码头文件，不复制一份测试错误码。
     shutil.copyfile(Path(args.common_source) / 'stm_err.h', common / 'stm_err.h')
 
+    framework = Path(args.lcd_source).resolve()
+    if not (framework / 'CMakeLists.txt').is_file():
+        raise RuntimeError(f'Missing stm_lcd source: {framework}')
+
     def case(name, prelude='', flags=(), error=None, real=False, fetched=False):
         source = root / name
         source.mkdir()
@@ -51,26 +55,14 @@ def check(args, root):
                  'project(lvgl_dependency_test C CXX)\n'
                  'add_library(stm_common INTERFACE)\n'
                  f'target_include_directories(stm_common INTERFACE "{cmake_path(common)}")\n'
+                 + f'add_subdirectory("{cmake_path(framework)}" stm_lcd)\n'
                  + prelude + f'\nadd_subdirectory("{cmake_path(component)}" component)\n')
         if not error:
             if real:
                 # 真实 LVGL 路径检查 C/C++ 头文件、链接及实例创建/销毁。
                 for filename in ['headers.c', 'headers.cpp']:
                     shutil.copyfile(COMPONENT / 'tests' / filename, source / filename)
-                (source / 'main.c').write_text(
-                    '#include "stm_lvgl_port.h"\n'
-                    'static stm_err_t draw(void *ctx, uint16_t x1, uint16_t y1,\n'
-                    ' uint16_t x2, uint16_t y2, const void *pixels) {\n'
-                    ' (void)ctx; (void)x1; (void)y1; (void)x2; (void)y2; (void)pixels; return STM_OK; }\n'
-                    '_Alignas(64) static uint16_t pixels[16 * 4];\n'
-                    'int main(void) { lv_init(); lvgl_port_handle_t port = NULL;\n'
-                    'lvgl_port_config_t cfg = { .width = 16, .height = 16, .draw = draw,\n'
-                    ' .draw_buffer = pixels, .draw_buffer_bytes = sizeof(pixels) };\n'
-                    'if(lvgl_port_create(&cfg, &port) != STM_OK || !port) return 1;\n'
-                    'lv_display_t *display = NULL;\n'
-                    'if(lvgl_port_get_display(port, &display) != STM_OK || !display) return 2;\n'
-                    'if(lvgl_port_delete(&port) != STM_OK || port) return 3;\n'
-                    'return 0; }\n', encoding='utf-8')
+                (source / 'main.c').write_text('#include "stm_lvgl_port.h"\n#include "stm_lcd_impl.h"\nstatic stm_err_t draw(stm_lcd_panel_handle_t p, uint16_t x1, uint16_t y1,\n                     uint16_t x2, uint16_t y2, const void *pixels)\n{\n    (void)p; (void)x1; (void)y1; (void)x2; (void)y2; (void)pixels;\n    return STM_OK;\n}\nstatic uint32_t clock_ms(void)\n{\n    return 100;\n}\nstatic const stm_lcd_io_ops_t io_ops = {0};\nstatic void destroy(stm_lcd_panel_handle_t p)\n{\n    (void)p;\n}\nstatic const stm_lcd_panel_ops_t panel_ops = {.draw = draw, .destroy = destroy};\n_Alignas(64) static uint16_t pixels[16 * 4];\nint main(void)\n{\n    struct stm_lcd_io io = {0};\n    struct stm_lcd_panel panel = {0};\n    if (stm_lcd_io_init(&io, &io_ops, NULL) != STM_OK) return 1;\n    if (stm_lcd_panel_base_init(&panel, &panel_ops, &io, 16, 16) != STM_OK) return 2;\n    lvgl_port_handle_t port = NULL;\n    lvgl_port_config_t cfg = {.io = &io, .panel = &panel, .width = 16, .height = 16,\n                             .draw_buffer = pixels, .draw_buffer_bytes = sizeof(pixels),\n                             .clock_ms = clock_ms};\n    if (lvgl_port_create(&cfg, &port) != STM_OK || !port) return 3;\n    lv_display_t *display = NULL;\n    if (lvgl_port_get_display(port, &display) != STM_OK || !display) return 4;\n    if (lvgl_port_process(port, 100) != STM_OK) return 5;\n    if (lvgl_port_delete(&port) != STM_OK || port) return 6;\n    stm_lcd_panel_handle_t handle = &panel;\n    if (stm_lcd_panel_delete(&handle) != STM_OK || handle) return 7;\n    if (stm_lcd_io_deinit(&io) != STM_OK) return 8;\n    return 0;\n}\n', encoding='utf-8')
                 (source / 'lv_conf.h').write_text(
                     '#ifndef LV_CONF_H\n#define LV_CONF_H\n#define LV_COLOR_DEPTH 16\n'
                     '#define LV_USE_THORVG_INTERNAL 0\n#endif\n', encoding='utf-8')
@@ -158,6 +150,8 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--common-source', default=str(COMPONENT.parent / 'stm_common'),
                         help='stm_common directory containing stm_err.h')
+    parser.add_argument('--lcd-source', default=str(COMPONENT.parent / 'stm_lcd'),
+                        help='Generic stm_lcd framework source directory')
     parser.add_argument('--c-compiler', default='gcc')
     parser.add_argument('--cxx-compiler', default='g++')
     parser.add_argument('--lvgl-source', help='Real LVGL 9 source for additional compile/link/run checks')
