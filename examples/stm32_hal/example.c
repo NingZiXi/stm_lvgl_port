@@ -8,7 +8,9 @@ stm_err_t lvgl_port_example_start(const lvgl_port_config_t *config, lvgl_port_ha
 {
     stm_err_t err = lvgl_port_create(config, port);
     if (err != STM_OK)
+    {
         return err;
+    }
     lv_display_t *display = NULL;
     err = lvgl_port_get_display(*port, &display);
     if (err != STM_OK)

@@ -26,3 +26,5 @@ IndentExternBlock: NoIndent
 AlignTrailingComments:
   Kind: Always
   OverEmptyLines: 0
+
+InsertBraces: true

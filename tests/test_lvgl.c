@@ -11,15 +11,18 @@ static lv_display_t displays[4];
 static lv_indev_t inputs[4];
 static int display_used[4], input_used[4], fail_display, fail_input;
 static unsigned live_displays, live_inputs;
-static char deletion_order[16];
+static char deletion_order[256];
 static unsigned deletion_count;
 
 lv_display_t *lv_display_create(int32_t w, int32_t h)
 {
     assert(w == 2 && h == 2);
     if (fail_display)
+    {
         return NULL;
+    }
     for (unsigned i = 0; i < 4; ++i)
+    {
         if (!display_used[i])
         {
             display_used[i] = 1;
@@ -27,6 +30,7 @@ lv_display_t *lv_display_create(int32_t w, int32_t h)
             memset(&displays[i], 0, sizeof displays[i]);
             return &displays[i];
         }
+    }
     assert(0);
     return NULL;
 }
@@ -34,6 +38,7 @@ lv_display_t *lv_display_create(int32_t w, int32_t h)
 void lv_display_delete(lv_display_t *d)
 {
     for (unsigned i = 0; i < 4; ++i)
+    {
         if (d == &displays[i])
         {
             assert(display_used[i]);
@@ -42,6 +47,7 @@ void lv_display_delete(lv_display_t *d)
             deletion_order[deletion_count++] = 'd';
             return;
         }
+    }
     assert(0);
 }
 
@@ -63,7 +69,8 @@ void *lv_display_get_user_data(lv_display_t *d)
 
 void lv_display_set_buffers(lv_display_t *d, void *a, void *b, uint32_t n, int mode)
 {
-    assert(a && n >= 4 && mode == LV_DISPLAY_RENDER_MODE_PARTIAL);
+    assert(a && n >= 4);
+    d->mode = mode;
     d->buffers[0] = a;
     d->buffers[1] = b;
 }
@@ -79,6 +86,17 @@ void lv_display_set_flush_wait_cb(lv_display_t *d, void (*cb)(lv_display_t *))
     d->wait = cb;
 }
 
+uint32_t lv_draw_buf_width_to_stride(uint32_t width, int color_format)
+{
+    assert(color_format == LV_COLOR_FORMAT_RGB565);
+    return lv_is_initialized() ? width * 2u : 0;
+}
+
+int lv_display_flush_is_last(lv_display_t *d)
+{
+    return !d->not_last;
+}
+
 void lv_display_flush_ready(lv_display_t *d)
 {
     ++d->ready;
@@ -87,8 +105,11 @@ void lv_display_flush_ready(lv_display_t *d)
 lv_indev_t *lv_indev_create(void)
 {
     if (fail_input)
+    {
         return NULL;
+    }
     for (unsigned i = 0; i < 4; ++i)
+    {
         if (!input_used[i])
         {
             input_used[i] = 1;
@@ -96,6 +117,7 @@ lv_indev_t *lv_indev_create(void)
             memset(&inputs[i], 0, sizeof inputs[i]);
             return &inputs[i];
         }
+    }
     assert(0);
     return NULL;
 }
@@ -103,6 +125,7 @@ lv_indev_t *lv_indev_create(void)
 void lv_indev_delete(lv_indev_t *indev)
 {
     for (unsigned i = 0; i < 4; ++i)
+    {
         if (indev == &inputs[i])
         {
             assert(input_used[i]);
@@ -111,6 +134,7 @@ void lv_indev_delete(lv_indev_t *indev)
             deletion_order[deletion_count++] = 'i';
             return;
         }
+    }
     assert(0);
 }
 
@@ -143,16 +167,16 @@ void lv_indev_set_read_cb(lv_indev_t *i, void (*cb)(lv_indev_t *, lv_indev_data_
 
 typedef struct
 {
-    struct stm_lcd_io io, touch_io;
-    struct stm_lcd_panel panel;
-    struct stm_lcd_touch touch;
-    lvgl_port_handle_t port;
-    unsigned waits;
-    unsigned inline_complete;
-    unsigned drawings, touch_reads, delay_polls, observations;
-    stm_err_t draw_error, touch_error;
-    int pressed;
-    uint16_t x, y;
+    struct stm_lcd_io io, touch_io;                            // 通用 IO 与借用状态。
+    struct stm_lcd_panel panel;                                // 模型面板。
+    struct stm_lcd_touch touch;                                // 模型触摸。
+    lvgl_port_handle_t port;                                   // 当前受测 port。
+    unsigned waits;                                            // 等待服务次数。
+    unsigned inline_complete;                                  // 提交内立即完成标志。
+    unsigned drawings, touch_reads, delay_polls, observations; // 绘图、采样与观察计数。
+    stm_err_t draw_error, touch_error;                         // 注入绘图/触摸错误。
+    int pressed;                                               // 模拟触摸按下。
+    uint16_t x, y;                                             // 模拟坐标。
 } mock_t;
 
 static stm_err_t draw(stm_lcd_panel_handle_t panel,
@@ -177,7 +201,9 @@ static stm_err_t touch_read(stm_lcd_touch_handle_t t, stm_lcd_touch_point_t *p, 
     p->y = m->y;
     p->id = 0;
     if (m->pressed != 0 && m->pressed != 1)
+    {
         return STM_ERR_VERIFY;
+    }
     return m->touch_error;
 }
 
@@ -321,7 +347,9 @@ void lv_display_add_event_cb(lv_display_t *d, void (*cb)(lv_event_t *), int code
 {
     assert(code == LV_EVENT_INVALIDATE_AREA);
     if (fail_event)
+    {
         return;
+    }
     d->event_cb = cb;
     d->event_user = user;
     ++d->event_count;

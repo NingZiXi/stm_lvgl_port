@@ -1,148 +1,124 @@
 # stm_lvgl_port
 
-[![version 1.0.0](https://img.shields.io/badge/version-1.0.0-5364b5?style=flat-square)](https://github.com/NingZiXi/stm_lvgl_port/releases/tag/v1.0.0)
+LVGL 9 的芯片无关粘合层，接收 `stm_lcd` 通用 IO/panel/可选 touch 句柄。默认 RGB565 PARTIAL，可显式选择 DIRECT 双整帧；应用提供缓冲、时钟与板级能力，port 不操作 HAL、不分配大帧缓冲、不新增线程。
 
-LVGL 9 的轻量显示/输入粘合层。接收通用 IO、面板、可选触摸、外部 RGB565 缓冲及运行策略，自动连接刷新完成和触摸服务。无芯片判断、HAL 依赖、后台任务或大块帧缓冲自动分配。
+**版本边界：** 已发布 `v1.0.0` 为通用句柄 PARTIAL 基线；本文描述当前提交的扩展，尚无新的正式版本。DIRECT 与原子寄存器需要匹配的 `stm_lcd` 提交（`STM_LCD_FRAMEBUFFER_API=1`），不能把本 README 套用到旧 tag。原 tag 保留，聚合仓库 gitlink 固定迁移组合；迁移提交同步 GitHub/Gitee，不新增 tag 或 Release。2026-10-11 的 H757 DIRECT Debug 实板范围见下文。
 
 ## 🤖 让 Agent 帮助接入
 
-复制以下 Prompt，将 `<...>` 替换为实际需求：
+> 将本组件接入工程。先读 AGENTS.md、README、公开头和渲染说明，核对 MCU、HAL、面板/触摸、供电/接线、内存/缓存与 VSYNC 条件，保留已有改动；使用通用句柄，不添加芯片分支或绘图/输入包装。按实际选择 PARTIAL 或 DIRECT，报告源码版本、软件与硬件验证边界，未经确认不烧录或发布。
 
-> 将 [stm32-hal-lib](https://github.com/NingZiXi/stm32-hal-lib) 中的 `stm_lvgl_port` 接入当前工程，实现 `<功能>`。硬件：`<MCU/器件型号、外设与引脚、屏幕尺寸与方向（按需填写）>`。先读组件 AGENTS.md 和 README，核对配置，保留已有代码；缺失信息先询问，不猜接线。完成后说明版本、编译结果和未验证项；未经确认不烧录或擦写。
+## 最小 PARTIAL 接入
 
-💡 可使用 [Gitee 镜像](https://gitee.com/nzxhg/stm32-hal-lib)。需要业务入口和日志时，参考 [skills/README.md](https://github.com/NingZiXi/stm32-hal-lib/blob/main/skills/README.md)（仅适用于已有 CubeMX1 CMake 工程）；编译通过不代表实板验证通过。
+设备先由各芯片组件创建和初始化，再创建 port：
 
-## 目录与接入边界
+```c
+_Alignas(64) static uint16_t pixels[320 * 16];
+static lvgl_port_handle_t port = NULL;
+lvgl_port_config_t config =
+{
+    .io = panel_io,
+    .panel = panel,
+    .touch = touch, // 无触摸时为 NULL。
+    .width = 320,
+    .height = 240,
+    .draw_buffer = pixels,
+    .draw_buffer_bytes = sizeof(pixels),
+    .clock_ms = board_clock_ms,
+    // 零初始化的 render_mode 即 PARTIAL，同步 draw_async=0。
+};
+stm_err_t err = lvgl_port_create(&config, &port);
+// 成功后通过 lvgl_port_get_display 获得 display 并创建 UI。
+// 主循环唯一服务入口：lvgl_port_process(port, board_clock_ms())。
+```
 
-- `include/stm_lvgl_port.h`：配置、生命周期、process、设备及状态查询。
-- `src/`：LVGL 接入、协作式调度、刷新所有权与输入策略。
-- `examples/stm32_hal/`：通用句柄接入标签 UI 的最小示例。
-- `docs/render-modes.md`：[渲染与缓冲所有权](docs/render-modes.md)。
-- `tests/`：mock LVGL、分配故障、可替换设备与依赖解析回归。
+`create` 初始化 LVGL、绑定 tick、创建 display/可选 indev，自动订阅面板并借用触摸；失败释放本次所有资源，输出保持 NULL。应用不再调用 `lv_tick_inc` 或 `lv_timer_handler`，也不单独删除获取的 LVGL 对象。
 
-应用只需要创建板级 IO/面板/触摸、配置 port、创建 UI，并在主循环调用 process。不要另写 draw、wait、touch、flush_ready 包装，也不要引入重复 display_service。
+PARTIAL 的面板提供同步紧密 RGB565 区域绘图；异步需设置 `draw_async=1` 且设备/IO 确实支持。SPI 字节顺序通过 `rgb565_swap` 选择，驱动不重复交换。`refresh_full_width/refresh_align_rows` 在渲染前扩展脏区，不在 flush 扩大发送未渲染像素。
 
-## CMake 与依赖
+## DIRECT 双帧
 
-C11、CMake 3.22+、`stm_lcd`、`stm_common` 和 LVGL 9；实际验证基线为 LVGL 9.3.0。
+```c
+_Alignas(64) static uint16_t frame_a[800 * 1280];
+_Alignas(64) static uint16_t frame_b[800 * 1280];
+// 实际由消费工程链接到 SDRAM 等可扫描内存；声明本身不决定存储位置。
+config.render_mode = LVGL_PORT_RENDER_DIRECT;
+config.width = 800;
+config.height = 1280;
+config.draw_buffer = frame_a;
+config.draw_buffer2 = frame_b;
+config.draw_buffer_bytes = sizeof(frame_a); // 每块必须精确为 width*height*2。
+config.draw_async = 0; // DIRECT 自带整帧异步切换，不使用 SPI draw_async。
+config.rgb565_swap = 0;
+config.refresh_full_width = 0;
+config.refresh_align_rows = 0;
+```
+
+要求两块完整、等大、不重叠、对齐、紧密 RGB565 帧，LVGL 实际 stride 必须等于 width×2；不可用任意行跨度、字节交换或 PARTIAL 对齐策略。面板必须支持 `present`，IO 必须实现 `present/process/busy/stop_scanout`。不满足则创建时返回 INVALID_CONFIG 或 NOT_SUPPORTED，不暗中退回 PARTIAL。
+
+多脏区刷新只在 `lv_display_flush_is_last()` 时提交整帧，其余区域立即 ready。VSYNC 后旧帧安全释放，**新帧持续扫描，仍不能重用**。首次切帧/停止错误锁存，即使 `latch_display_error=0` 也停止新渲染；继续服务在途请求，停止失败不 ready、不删除、不归还缓冲。缓存、扫描时序、停止与恢复责任详见 [docs/render-modes.md](docs/render-modes.md)。不提供 FULL、多屏管理或自动恢复。
+
+## 触摸与调度
+
+同一 port 支持 AXS、FT5206、GT9271 通用快照，无芯片分支。默认每 20 ms 读取、200 ms 过期松开、1000 ms 离线探测。IO/TIMEOUT 标离线，VERIFY 释放但不直接离线；保留最近有效坐标。无新 GT 帧持续按住的行为由 GT 驱动保持。
+
+`process` 串行服务显示 IO、触摸和到期 handler；DMA/VSYNC 等待期间服务独立触摸 IO，不递归进入 LVGL。异步/DIRECT 时面板与触摸不能共用一个 IO。IRQ 只写邮箱；观察/idle 回调不得调用 LVGL、process、delete 或重新配置借用对象。
+
+## 生命周期与诊断
+
+`create` 输出非空返回 INVALID_STATE，分配失败 NO_MEM，非法参数 INVALID_ARG，缺失配置 INVALID_CONFIG。缺失绘图/扫描能力 NOT_SUPPORTED，底层 `stm_err_t` 原样传递。
+
+`get_display/get_indev` 返回借用对象；`get_status` 获取最近显示/触摸错误、输入状态和 handler 耗时，不清除状态。没有触摸时 indev 为 NULL。DIRECT 和配置了 `latch_display_error` 的 PARTIAL 返回锁存的显示错误；普通 PARTIAL 的最近错误查 status。
+
+删除顺序 port → touch/panel → IO → HAL/帧缓冲；`delete(&port)` 空句柄成功，忙/回调中拒绝并保留实例。DIRECT 删除先停止扫描，失败原样返回并保留订阅/对象，成功后解除设备借用，先删除 indev 再删除 display。没有在途请求不等于扫描已停止。需要重建时先完成/停止、删除，再显式重新初始化/创建，不隐式复位其他器件。
+
+## 构建与依赖
 
 ```cmake
-# 先提供真实 stm_common/stm_lcd/lvgl target，或按下表准备源码。
+add_subdirectory(Lib/stm_common)
+add_subdirectory(Lib/stm_lcd) # 匹配本次扩展的本地框架
+# 按所需型号添加芯片组件，完成 HAL IO 与设备创建。
+# 应用提供 lv_conf.h 和 LV_BUILD_CONF_PATH，或已有 lvgl target。
+set(STM_LVGL_PORT_LVGL_SOURCE_DIR /path/to/lvgl-9.3.0 CACHE PATH "")
+set(STM_LVGL_PORT_FETCH_LVGL OFF CACHE BOOL "")
 add_subdirectory(Lib/stm_lvgl_port)
 target_link_libraries(your_firmware PRIVATE stm_lvgl_port)
 ```
 
-`stm_lcd` 只复用已有 target 或同级源码，缺失明确报错，port 不自动下载框架。`stm_common` 优先 target/同级源码，否则可固定获取 v1.0.0 提交 `ce3d186dde2d374a8e9c7b9068a7b88f97d57dc1`；可用 `STM_COMMON_FETCH=OFF` 关闭下载。
+LVGL 解析：已有 `lvgl` target → 显式源码 `STM_LVGL_PORT_LVGL_SOURCE_DIR` → FetchContent 离线覆盖 `FETCHCONTENT_SOURCE_DIR_LVGL` → 缺失时固定 9.3.0 提交 `c033a98afddd65aaafeebea625382a94020fe4a7`。默认关闭额外 LVGL demos/examples/internal ThorVG 构建，但尊重应用已设值；不修改供应商源码。镜像可设 `STM_LVGL_PORT_LVGL_GIT_REPOSITORY`，下载开关如上，无效显式目录失败。
 
-LVGL 解析顺序为已有 `lvgl` target（含 alias） → 显式源码 → FetchContent 离线覆盖 → 固定获取：
+`stm_lcd` 只复用已有 target 或同级源码，不由 port 下载。`stm_common` 优先已有 target/同级源码，否则固定 v1.0.0 提交 `ce3d186dde2d374a8e9c7b9068a7b88f97d57dc1`，支持 STM_COMMON_FETCH、STM_COMMON_GIT_REPOSITORY 与 FETCHCONTENT_SOURCE_DIR_STM_COMMON。公开链接 LVGL、common 与 lcd。已有 target 的实际版本由消费工程验证。
 
-| 选项 | 用途 |
+## 迁移与软件验证
+
+| 原接口/用法 | 本工作区 |
 | --- | --- |
-| `STM_LVGL_PORT_LVGL_SOURCE_DIR` | 显式离线源码目录，无效时不回退下载 |
-| `FETCHCONTENT_SOURCE_DIR_LVGL` | FetchContent 离线源码覆盖 |
-| `STM_LVGL_PORT_FETCH_LVGL=OFF` | 缺少 target/本地源码时明确失败 |
-| `STM_LVGL_PORT_LVGL_GIT_REPOSITORY` | 可信镜像；固定 `c033a98afddd65aaafeebea625382a94020fe4a7`（9.3.0） |
-
-应用提供 `lv_conf.h` / `LV_BUILD_CONF_PATH`。默认关闭额外 demos/examples/ThorVG 构建，但不强制覆盖应用已设置的选项。不要通过修改供应商 LVGL 源码接入；完全离线时同时准备所有依赖。
-
-## 最小接入过程
-
-下例为已验证 STM32F4 配置片段，不包含硬件初始化；传入设备必须已创建，面板必须已成功 init 并开启显示。两块缓冲静态保存于普通 SRAM，不能放入 CCM。
-
-```c
-#include "stm_lvgl_port.h"
-#include "stm32f4xx_hal.h"
-
-static LV_ATTRIBUTE_MEM_ALIGN uint8_t buffer_a[170 * 16 * 2];
-static LV_ATTRIBUTE_MEM_ALIGN uint8_t buffer_b[170 * 16 * 2];
-
-stm_err_t create_display(stm_lcd_io_handle_t io,
-                         stm_lcd_panel_handle_t panel,
-                         stm_lcd_touch_handle_t touch,
-                         lvgl_port_handle_t *port)
-{
-    lvgl_port_config_t config =
-    {
-        .io = io,
-        .panel = panel,
-        .touch = touch,
-        .width = 170,
-        .height = 560,
-        .draw_buffer = buffer_a,
-        .draw_buffer_bytes = sizeof buffer_a,
-        .draw_buffer2 = buffer_b,
-        .clock_ms = HAL_GetTick,
-        .draw_async = 1,
-        .rgb565_swap = 1,
-        .refresh_full_width = 1,
-        .refresh_align_rows = 8,
-        .latch_display_error = 1,
-    };
-    return lvgl_port_create(&config, port);
-}
-```
-
-调用前 `*port` 必须为 NULL，检查返回值后再创建应用 UI。`touch = NULL` 可仅接显示。无 DMA 时改为 `draw_async = 0`，可省略第二缓冲。UI 可通过 `lvgl_port_get_display()` 获取 display 并使用其活动 screen；不能由应用单独删除 port 持有的 display/indev。
-
-主循环使用 `lvgl_port_process(port, HAL_GetTick())`，**即使出现锁存错误也要继续服务**，否则在途缓冲可能无法安全归还。port 自动初始化 LVGL（必要时）并绑定 tick；不要同时调用 `lv_tick_inc()` 或另行运行 `lv_timer_handler()`。最小标签示例见 [example.c](examples/stm32_hal/example.c) 与[示例说明](examples/stm32_hal/README.md)。
-
-## 配置与运行契约
-
-| 配置 | 约束 / 默认 |
-| --- | --- |
-| `io` / `panel` | 必须匹配同一个 IO，尺寸必须与配置一致，一个面板仅一个刷新所有者 |
-| `draw_buffer` / `draw_buffer2` | RGB565、至少完整一行、每块不超过 UINT32_MAX；双缓冲等大、不重叠、满足 LV_DRAW_BUF_ALIGN（未定义时至少 2 字节对齐） |
-| `draw_async` | 布尔值；面板和 IO 都须支持异步完成服务 |
-| `clock_ms` / `idle` | 必需毫秒时钟；idle 可选，单步执行，不重入 LVGL/process |
-| `rgb565_swap` | 传输前交换字节；不要在其他层重复交换 |
-| `refresh_full_width` | 在渲染前扩展到全宽，不在传输时拼接像素 |
-| `refresh_align_rows` | 0/1 关闭；启用时高度和缓冲可容纳的整行数须整除对齐行数 |
-| `handler_period_ms` | 0 使用 10 ms；表示调度周期，不是保证帧率 |
-| `touch_period_ms` / `touch_stale_ms` / `touch_retry_ms` | 0 分别使用 20 / 200 / 1000 ms |
-| `latch_display_error` | 首次显示错误后停止新刷新，但继续服务在途 IO |
-| `flush_observer` / `touch_observer` | 可选主循环诊断回调，不调用 LVGL、process 或 delete |
-
-- 异步模式下触摸 IO 必须与面板 IO 分离，否则构造拒绝；配置触摸逻辑边界应与显示一致。
-- process 先服务 IO 和输入，再运行到期 LVGL handler；DMA 等待期间继续服务独立 I2C 输入，不递归进入 handler。
-- 自动完成链为 IO 安全停止 → 面板请求结束 → LVGL flush_ready。立即完成与失败提交也必须保持一次归还语义。
-- 输入读取回调只取缓存。IO/TIMEOUT 导致离线；VERIFY 释放输入但不直接判为总线离线。过期释放及探测恢复不自动复位设备。
-- 所有 API 与 LVGL 在串行主循环使用；禁止 ISR、递归 process、观察回调中删除或操作 LVGL。对象存活时不替换全局 tick；不提供多屏管理。
-- 删除前必须无在途刷新，port 自动解除面板订阅和触摸借用，不删除外部设备或缓冲。
-
-## 状态、错误与迁移
-
-观察回调的 `context` 来自 `observer_context`。刷新观察中的 `pixels` 为本次像素数，`complete=0` 表示准备提交（不等于提交成功），`complete=1` 表示此次刷新结束及最终结果；不得据观察回调自行归还缓冲。触摸观察中的 down 为零时，x/y 保留最近有效坐标，不能据此判为按下。
-
-`lvgl_port_get_status()` 返回显示/触摸最近错误、在途刷新、在线/按下状态及坐标；查询不清错。`last_handler_ms` 是本次 handler 耗时（含 DMA 等待），本次未运行时为零，不直接等于 CPU 百分比。
-
-process 的返回值为锁存显示错误；触摸错误应从状态读取。参数/配置错误检查尺寸、IO 一致性、缓冲对齐、重叠及能力；INVALID_STATE 检查设备占用和生命周期；INVALID_CONTEXT 检查 process 重入。
-
-旧 draw/wait/touch 配置改为通用句柄，不保留兼容包装。板级仅保留硬件配置、构造/初始化和共享复位协调；UI、业务与可选诊断留在应用。不修改 CubeMX/HAL/供应商 LVGL，也不在此次接入中混入 SPI 提速或 FULL/DIRECT 模式。
-
-## 主机测试
-
-需要 CMake 3.22+、Ninja、支持 C11/C++17 的主机编译器。从**组件根目录**执行：
+| v0.3.0 draw/wait/touch 应用回调 | 通用 IO/panel/touch；不保留旧包装 |
+| v1.0.0 零初始化配置 | 仍默认 PARTIAL，现有同步/异步行为保留 |
+| 消费工程自行替换 DIRECT flush | 显式 render_mode + 通用 present 能力；不替换 port 回调 |
+| 公开内部状态/手动 tick、handler | get_display/get_indev/get_status 与唯一 process |
 
 ```sh
 cmake -S tests -B build/tests -G Ninja
 cmake --build build/tests
 ctest --test-dir build/tests --output-on-failure
+python tests/test_dependency.py --lcd-source ../stm_lcd --common-source ../stm_common --lvgl-source /path/to/lvgl-9.3.0
+cmake -S tests/real_lvgl -B build/real -G Ninja -DSTM_LVGL_PORT_LVGL_SOURCE_DIR=/path/to/lvgl-9.3.0
+cmake --build build/real
+ctest --test-dir build/real --output-on-failure
 ```
 
-测试时需将 `stm_common` 和 `stm_lcd` 放在本组件同级（`stm_lcd` 自身只需同级 `stm_common`），或按测试 CMake 的要求准备依赖。嵌入式交叉编译器不用于运行主机测试。可显式传入 `-DCMAKE_C_COMPILER=<主机C编译器>` 和 `-DCMAKE_CXX_COMPILER=<主机C++编译器>`。
+测试包括原有 PARTIAL/异步/输入契约、五驱动通用句柄集成、DIRECT 分配/配置/VSYNC/停止故障，真实 LVGL 的局部渲染及双帧同步检查。真实 LVGL 测试使用软件 LTDC 模型，PARTIAL 与 DIRECT 在独立进程中分别验证首次创建、渲染及销毁；不证明 STM32 DCache、DSI 时序或实际硬件稳定性。中文接入例见 [examples/stm32_hal](examples/stm32_hal/README.md)。
 
-mock 测试不替代真实 LVGL 渲染。独立依赖检查（默认不访问网络）可从组件根目录执行：
+## 本地消费工程实板验证（2026-10-11）
 
-```sh
-python tests/test_dependency.py --lcd-source /absolute/path/to/stm_lcd --common-source /absolute/path/to/stm_common
-```
+H757 + ILI9881C/GT9271、LVGL 9.3.0、800×1280 RGB565 DIRECT 双缓冲和板级 DMA2D，
+LVGL-Debug 诊断固件通过 ST-Link 双核烧录独立读回、持续刷新、触摸/按钮事件及五次软件复位，
+用户确认显示及触摸正常。修复了首次 DIRECT create 在 LVGL 初始化前查询 stride 导致拒绝有效配置的问题；
+create 自动完成初始化后再校验实际跨度，应用无需预先 lv_init()。
 
-加 `--lvgl-source /absolute/path/to/lvgl` 可验证真实离线 LVGL 的编译、链接与运行；仅显式 `--fetch` 才检查真实网络获取。消费工程另维护真实渲染、DMA/输入安全及构建矩阵回归。
+Debug/Release 消费固件已构建；本次未重新烧录 Release、Widgets 或 PARTIAL，未覆盖其他芯片实物、
+掉电复位、长期稳定性、色序/边角坐标量化或性能基准。该记录仅对应本次迁移提交组合，原正式 tag 不含本次扩展。
+日志、固件 SHA256、源码哈希和备份留在消费工程本地构建目录；迁移提交已同步 GitHub/Gitee，尚未发布包含扩展的新 tag 或 Release。
 
-## 验证范围与许可
-
-2026-10-10，消费工程在 STM32F407 + AXS15231B、21 MHz SPI、170×560 原生竖屏、RGB565、两个 16 行普通 SRAM 缓冲的配置下完成显示和触摸验收。当前文档整理不改变这一运行配置。
-
-该结果不等于其他模组、其他 MCU 或长时间稳定性验收；既有触摸畸形帧问题不能标记为已修复。当前正式版本为 `v1.0.0`，统一接口不兼容重构前 API；接入时以该版本公开头文件为准，不将旧版本的接口或验收结论套用到本版本。
-
-维护者的 MIT 许可证保持原内容，见 [LICENSE](LICENSE)。源码中已有的第三方来源及许可说明保持保留。Agent 工作约束见 [AGENTS.md](AGENTS.md)。
+[MIT](LICENSE)。

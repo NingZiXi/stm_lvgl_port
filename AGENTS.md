@@ -13,11 +13,11 @@
 - LVGL target 复用优先；离线源码优先于固定 9.3.0 拉取 `c033a98afddd65aaafeebea625382a94020fe4a7`。stm_lcd 只用已有 target/同级源码，不由 port 下载。
 - 应用提供 lv_conf；不强制覆盖应用 CMake 选项，不改供应商 LVGL。当前 API 是破坏性迁移，不按旧 v0.3.0 兼容接口接入。
 - create 自动初始化 LVGL/tick、订阅刷新及借用输入；应用只创建 UI 和调用 process，不再调用 lv_tick_inc/handler。
-- 固定 RGB565 PARTIAL，外部对齐缓冲至少一行；双缓冲等大不重叠，不自动分配大帧缓冲。参考板双16行各5440字节普通 SRAM，不用 CCM。
+- 默认 RGB565 PARTIAL，外部对齐缓冲至少一行；显式 DIRECT 要求两块完整紧密 RGB565 帧与真实 VSYNC/停止能力。不要在应用替换 flush。细则集中在 docs/render-modes.md；不自动分配大帧缓冲。
 - 全宽/8行扩展发生在渲染前，不在 flush 中扩大区域发送未渲染像素。IO停止 → panel完成 → LVGL ready 保持一次语义。
 - process 主循环串行，错误后仍服务在途 IO；DMA等待服务独立I2C，但不递归LVGL。ISR/观察回调不能操作 LVGL、删除或递归process。
 - 输入默认20ms采样、200ms过期释放、1000ms离线探测；IO/TIMEOUT离线，VERIFY释放但不直接离线，不自动共享复位。
-- 每面板一个port；借用设备/缓冲；无在途才删除并解除订阅。禁止对象存活时替换全局tick，不新增多屏/RTOS/队列。
+- 每面板一个port；借用设备/缓冲；无在途且 DIRECT 停止扫描成功才删除并解除订阅。禁止对象存活时替换全局tick，不新增多屏/RTOS/队列。
 - 主机测试需同级 stm_common/stm_lcd，mock 不替代真实 LVGL；消费工程必须额外验证真实渲染、异步和输入安全。
 
 ## 编码与注释
@@ -52,3 +52,5 @@ python tests/test_dependency.py --lcd-source /absolute/path/to/stm_lcd --common-
 ```
 
 需要 Python 3；无真实源码时可省略 --lvgl-source 仅检查 mock/解析并明确未验证真实渲染。默认不访问网络；--fetch 是显式网络测试，固定版本不可漂移。--build-dir 可指定新目录留存日志。
+
+当前提交的扩展要求匹配的 stm_lcd 源码（STM_LCD_FRAMEBUFFER_API=1）；已发布 v1.0.0 不够。除 mock/依赖检查外，使用 `tests/real_lvgl` 的本地 LVGL 9.3.0 运行 PARTIAL/DIRECT 渲染回归；软件模型不等于 MCU 实板。
